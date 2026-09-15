@@ -50,15 +50,14 @@ order by rows desc
 
 `loaded_at` comes from dlt's `_dlt_load_id`, a unix epoch stamped at ingest. It
 measures **our load, not the publisher's release**: a stale timestamp here means
-the pipeline stopped running, not that OWID stopped publishing. That is also why
-it is tautologically green on a freshly built copy of this site, since the build
-loads the data and then reports on the load.
+the pipeline stopped running, not that the publisher stopped publishing. That is
+also why it is tautologically green on a freshly built copy of this site, since
+the build loads the data and then reports on the load.
 
-Note the two distinct timestamps. Four resources load with `replace` and three
-load incrementally, and `refresh` is an argument to a dlt *run*, not a property
-of a resource, so a single run cannot refresh the first group while leaving the
-second alone. It is two loads, seconds apart, and this table is where that shows
-up.
+Expect one timestamp per load *group*, not per resource. `refresh` is an
+argument to a dlt run rather than a property of a resource, so the `replace`
+resources and the incremental ones go in separate runs, seconds apart, and this
+table is where that shows up.
 
 ## What each layer holds
 
@@ -76,14 +75,14 @@ order by layer, table_name
     <Column id=year_max title="To" fmt="0"/>
 </DataTable>
 
-`marts.dim_country_year` is larger than the fact it feeds, and that is the
-design: the spine is the complete cross join, the fact is the part of it any
-source reports. The difference is the subject of the [coverage page](/coverage).
+A dimension being larger than the fact it feeds is the design, not a defect:
+the spine carries every period, and the fact carries the periods some source
+reported. The gap between the two is what a coverage question is about.
 
-The two `history` tables, `snap_co2_estimates` and `snap_grid_emission_factors`,
-are the ones a rebuild cannot reproduce. Every other row above is derivable from
-the sources. Those two are accumulated state, and deleting the warehouse destroys
-them for good.
+`analytics.pipeline_runs` is the row above that a rebuild cannot reproduce — one
+row per dbt node per invocation, appended, because each build overwrites the
+artifact the last one was read from. Everything else here is derivable from the
+sources; that one is accumulated state, and deleting the warehouse destroys it.
 
 ## Test coverage
 
@@ -122,12 +121,12 @@ order by tests desc
     <Column id=tests title="Count" fmt="0"/>
 </DataTable>
 
-The distribution is deliberate. `accepted_range` dominates because the failure
-mode this warehouse actually has is a plausible-looking wrong number, not a
-missing one: a unit error, a percentage over 100, a year outside a source's
-range. The `unique_combination_of_columns` tests are the grain contract,
-`(country_iso3, year)` on every fact-shaped model, which is what catches a
-duplicate on either side of a join fanning rows out downstream.
+The distribution is a choice worth making deliberately. `accepted_range` earns
+its place because the failure mode a warehouse actually has is a
+plausible-looking wrong number, not a missing one: a unit error, a percentage
+over 100, a period outside a source's range. The uniqueness tests are the grain
+contract on every fact-shaped model, which is what catches a duplicate on either
+side of a join fanning rows out downstream.
 
 `dbt_project.yml` also sets `+store_failures: true` project-wide, so a test does
 not just return a count. It leaves the offending rows behind in
@@ -241,10 +240,10 @@ order by invocation_started_at
 {:else}
 
 There is only one build recorded so far, so there is no trend to draw yet. That
-is the expected state on a fresh warehouse and in CI, both of which start from an
-empty DuckDB file. The history accumulates a row set per `just pipeline-status`
-and is carried between published releases by `publish/restore_history.py` — the
-same machinery that keeps the snapshot revisions and the weather archive.
+is the expected state on a fresh warehouse and in CI, both of which start from
+an empty DuckDB file. The history grows by one row set per
+`just pipeline-status`, and lives only in `data/warehouse.duckdb` — a project
+that wants it to survive a rebuild has to carry the table forward itself.
 
 {/if}
 
