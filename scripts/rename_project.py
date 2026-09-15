@@ -17,6 +17,9 @@ Three things it deliberately does not touch:
 * **`warehouse.duckdb`**, the file's name, which dbt also writes into those
   fully-qualified view definitions.
 
+It skips itself, so this file keeps naming the placeholder and a second run
+reports that there is nothing left to rename.
+
 Run it on a clean tree, so `git diff` shows exactly what moved. Then
 `uv sync` (the distribution name changed) and `just test`.
 """
@@ -50,9 +53,14 @@ def tracked_text_files(root: Path) -> list[Path]:
         check=True,
     ).stdout.split("\0")
     out = []
+    this_file = Path(__file__).resolve()
     for name in filter(None, listed):
         path = root / name
         if not path.is_file() or path.is_symlink():
+            continue
+        # Itself: the placeholder is what this file documents, and a tool that
+        # rewrites its own instructions mid-run reads as a bug either way.
+        if path.resolve() == this_file:
             continue
         try:
             path.read_text()
