@@ -1,0 +1,2 @@
+select month_start, price_usd_per_troy_oz
+from marts.fct_gold_price_month

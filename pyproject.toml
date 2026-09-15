@@ -1,0 +1,133 @@
+[project]
+name = "gold-warehouse"
+version = "0.1.0"
+description = "A public-data warehouse built end to end: dlt → DuckDB → dbt → Polars → Evidence, orchestrated by Dagster, rebuilt from live sources on every push."
+readme = "README.md"
+authors = [{ name = "Daniel Scully", email = "danieldscully@gmail.com" }]
+requires-python = ">=3.13"
+
+# Runtime dependencies (the pipeline itself)
+dependencies = [
+    "dlt[duckdb]>=1.5",   # EL: API/file ingestion into DuckDB with schema inference
+    "duckdb>=1.1",        # in-process analytical warehouse
+    "polars>=1.17",       # heavy/columnar transforms in Python
+    # Runtime: DuckDB needs it for `to_arrow_reader()` and `.pl()`, so the retail
+    # ingest and both Polars transforms fail without it. See the
+    # `dependency-versions` skill.
+    "pyarrow>=17",        # DuckDB's Arrow bridge — needed by the ingest and both transforms
+    "dbt-duckdb>=1.9",    # T: dbt adapter targeting the DuckDB file
+]
+
+[dependency-groups]
+# `uv sync --group dev` — tooling that isn't needed to run the pipeline
+dev = [
+    # Exact, and pinned only here: pre-commit runs `just lint` against this copy.
+    # (ruff is the mirror image, pinned only in .pre-commit-config.yaml.) The
+    # templater requires the same version, so bump the two lines together.
+    "sqlfluff==4.3.0",     # SQL linter/formatter (dbt templater)
+    "sqlfluff-templater-dbt==4.3.0",  # .sqlfluff sets templater = dbt; useless without this
+    "pre-commit>=4.0",     # git hooks
+    "pytest>=8.3",         # unit tests over the ingest/transform logic (see tests/)
+    # Driven as `coverage run -m pytest`: pytest-cov measured identically for one
+    # more package. `>=` and no CI gate, for ty's reason below. See
+    # tests/README.md.
+    "coverage>=7.0",       # `just coverage`; reports, gates nothing
+    # `>=` unlike sqlfluff because nothing gates on it. It is 0.0.x and its
+    # diagnostics move between patches — promote to an exact pin *before* putting
+    # it in pre-commit or a workflow. See the linting-and-type-checking skill.
+    "ty>=0.0.74",           # `just typecheck`; agent/editor LSP via `ty server`
+    # The official CLI wheel (the `duckdb` library ships no binary), locked here
+    # rather than installed by curl or `uvx`, so `just sql` tracks uv.lock.
+    "duckdb-cli>=1.5.5",    # `just sql`; the CLI binary, via `uv run duckdb`
+]
+# `uv sync --group orchestration` — the Dagster asset graph in orchestration/.
+# The pipeline still runs without these (`just run`).
+orchestration = [
+    "dagster>=1.13.15",           # asset graph, schedules, freshness policies
+    "dagster-dbt>=0.29.15",       # dbt manifest -> assets + tests as asset checks
+    "dagster-dlt>=0.29.15",       # dlt resources -> assets, with subset loading
+    "dagster-webserver>=1.13.15", # the UI behind `just dagster`
+]
+
+[project.scripts]
+mds = "gold_warehouse:main"
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv]
+# `default-groups` deliberately unset, so uv's default (`dev`) applies and a bare
+# `uv sync` removes `orchestration`. A wider default would hide an undeclared
+# runtime dependency behind a group, as harlequin once hid pyarrow.
+# `uv sync --no-default-groups` is a runtime-only install. See the
+# `dependency-versions` skill.
+
+[tool.ruff]
+# The Python here was written to ~100 columns and `.sqlfluff` caps SQL at 120;
+# ruff's 88-column default would reflow every existing file on first run.
+line-length = 100
+
+[tool.ruff.lint]
+# No `select`: this runs ruff's own defaults, and the exact `rev` in
+# .pre-commit-config.yaml is the only thing that holds them still. `extend-select`
+# re-adds the 18 rules 0.16 dropped from that set, so a version bump can't
+# silently stop checking star imports and `== None`. See the
+# linting-and-type-checking skill.
+extend-select = [
+    "E401", "E402",                                   # multiple / non-top-level imports
+    "E701", "E702", "E703",                           # colons and stray semicolons
+    "E711", "E712", "E713", "E714", "E721",           # comparison style
+    "E731", "E741", "E742", "E743",                   # lambda assignment, ambiguous names
+    "F403", "F405", "F406",                           # star imports
+    "F722",                                           # syntax error in forward annotation
+]
+
+[tool.ruff.lint.isort]
+# Keep `from x import a, run as b` on one statement. ruff's default splits the
+# alias onto its own line, which shreds orchestration/assets.py's import block —
+# four layers each export a `run()`, so it aliases every one. See the
+# linting-and-type-checking skill.
+combine-as-imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# `ingest`, `lake`, `orchestration`, `publish`, `transform` and `scripts` are
+# top-level directories, not installed packages (only src/gold_warehouse is);
+# everything else reaches them via `python -m` from the repo root.
+pythonpath = ["."]
+# The unit tests mock every HTTP call; `just test-pipeline` is the integration
+# path and runs the real modules against checked-in fixtures instead.
+addopts = "-q"
+
+[tool.coverage.run]
+# Here rather than on the recipe, so an ad-hoc run measures the same thing.
+# `gold_warehouse` is the installed package; the rest are top-level
+# directories — the split `pythonpath` above exists for.
+source = ["ingest", "transform", "lake", "orchestration", "publish", "scripts", "gold_warehouse"]
+# This repo argues about deliberately-unreachable branches in prose; branch
+# coverage makes them a number.
+branch = true
+
+[tool.coverage.report]
+# No `fail_under`: nothing gates on this, and a threshold nobody chose is the
+# vanity metric ty's entry in the linting-and-type-checking skill argues against. Nothing is `omit`ted
+# either — hiding a deliberate gap is how it stops being a decision.
+# tests/README.md has the two caveats on reading the total.
+show_missing = true
+# The default, stated as a decision: a file at 100% is evidence too.
+skip_covered = false
+
+[tool.ty]
+# No `rules` overrides: the version in uv.lock holds the defaults still, and
+# suppressions are inline `# ty: ignore[rule]` beside their reason.
+
+[tool.ty.environment]
+# Explicit though ty finds it unaided: a checker that cannot see the venv does
+# not fail, it buries real diagnostics under phantom missing imports.
+python = "./.venv"
+
+[tool.dagster]
+# Lets `uv run dagster dev` find the code location with no extra flags.
+module_name = "orchestration.definitions"
+code_location_name = "gold_warehouse"

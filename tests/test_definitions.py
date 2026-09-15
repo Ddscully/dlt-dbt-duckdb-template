@@ -1,0 +1,203 @@
+"""Every asset and check in `assets.py` is registered in `definitions.py`.
+
+`dg.Definitions` takes an explicit list, and nothing complains about an omission:
+the asset simply isn't in the graph, so `AssetSelection.all()` never sees it and
+`dagster definitions validate` passes. An unlisted asset fails somewhere
+downstream; an unlisted check fails *silently*, because it just never runs.
+
+The explicit list stays (it is the one place that says what the graph is); this
+is what makes forgetting it loud.
+"""
+
+from __future__ import annotations
+
+import dagster as dg
+import pytest
+
+from orchestration.resources import dbt_project
+
+# `just test` runs before `dbt deps && dbt parse` in ci.yml, and importing
+# `orchestration.assets` needs the manifest that parse writes. CI re-runs this
+# file after the parse step; skipping keeps the unit-test tier importable in a
+# fresh clone rather than failing it for a missing build artifact.
+pytestmark = pytest.mark.skipif(
+    not dbt_project.manifest_path.exists(),
+    reason="needs dbt/target/manifest.json — run `just dbt-deps` and `dbt parse` first",
+)
+
+# The dlt-pipeline-deactivation fixture this file needs (importing the
+# orchestration layer leaves a dlt pipeline active process-wide) lives in
+# `tests/conftest.py`, shared with `test_asset_checks.py`.
+
+
+def _defined_in_assets_module():
+    """(asset keys, check keys) declared at module level in `assets.py`."""
+    from orchestration import assets
+
+    asset_keys: set[dg.AssetKey] = set()
+    check_keys: set[dg.AssetCheckKey] = set()
+    for value in vars(assets).values():
+        # `AssetChecksDefinition` is a *subclass* of `AssetsDefinition`, so this
+        # order is load-bearing: the other way round every check falls into the
+        # first branch, contributes an empty `.keys`, and the check set comes out
+        # empty — a test that passes by measuring nothing.
+        if isinstance(value, dg.AssetChecksDefinition):
+            check_keys.update(value.check_keys)
+        elif isinstance(value, dg.AssetsDefinition):
+            asset_keys.update(value.keys)
+    return asset_keys, check_keys
+
+
+def test_every_asset_defined_is_in_the_graph():
+    from orchestration.definitions import defs
+
+    defined, _ = _defined_in_assets_module()
+    # Executable, not `get_all_asset_keys()`: an unregistered asset that
+    # something *depends on* still shows up in the graph as an external node, so
+    # the wider set reports `analytics/retail_rfm` present purely because
+    # `pipeline_status` names it in `deps`.
+    in_graph = defs.resolve_asset_graph().executable_asset_keys
+
+    missing = defined - in_graph
+    assert not missing, (
+        "assets defined in orchestration/assets.py but not listed in "
+        f"orchestration/definitions.py: {sorted(k.to_user_string() for k in missing)}"
+    )
+
+
+def test_every_asset_check_defined_is_in_the_graph():
+    from orchestration.definitions import defs
+
+    _, defined = _defined_in_assets_module()
+    in_graph = set(defs.resolve_asset_graph().asset_check_keys)
+
+    missing = defined - in_graph
+    assert not missing, (
+        "asset checks defined in orchestration/assets.py but not listed in "
+        f"orchestration/definitions.py: {sorted(k.to_user_string() for k in missing)}"
+    )
+
+
+def test_every_raw_resource_has_an_asset_description():
+    """`RAW_DESCRIPTIONS` re-enumerates the dlt resources, and cannot be derived:
+    the prose is not computable from the source, so it is held to it instead.
+
+    `assets.py` reads it as `RAW_DESCRIPTIONS.get(name)`, which returns `None`
+    for an unlisted resource. The asset then materialises with no description
+    and nothing is red: the Dagster UI shows a blank where every sibling has a
+    sentence.
+
+    Lives here rather than in `tests/test_ingest.py` because reading the dict
+    means importing `orchestration.assets`, which needs dagster (an optional
+    group) and the manifest; this module already carries that skip and is
+    re-run by CI after `dbt parse`.
+    """
+    from ingest import pipeline
+    from orchestration.assets import RAW_DESCRIPTIONS
+
+    resources = {r.name for r in pipeline.public_indicators().resources.values()}
+
+    # Both directions, as separate assertions rather than one set equality: they
+    # catch different bugs and the failure message should say which happened.
+    undescribed = resources - RAW_DESCRIPTIONS.keys()
+    assert not undescribed, (
+        "dlt resources with no entry in orchestration/assets.py RAW_DESCRIPTIONS "
+        f"(they materialise with no description): {sorted(undescribed)}"
+    )
+
+    # The reverse direction is the one nothing else could surface. `.get()`
+    # never consults a key no resource matches, so a stale entry left by a
+    # rename is invisible — where a *missing* one at least shows as a blank.
+    orphaned = RAW_DESCRIPTIONS.keys() - resources
+    assert not orphaned, (
+        "RAW_DESCRIPTIONS entries naming no dlt resource — renamed or removed "
+        f"upstream and left behind here: {sorted(orphaned)}"
+    )
+
+    # A key check alone is satisfied by an empty string, which renders as the
+    # same blank the missing key does. The floor is deliberately a length rather
+    # than truthiness: `" "` is falsy nowhere and blank everywhere.
+    blank = sorted(name for name, text in RAW_DESCRIPTIONS.items() if not text.strip())
+    assert not blank, f"RAW_DESCRIPTIONS entries that render blank: {blank}"
+
+
+def _job_keys(name: str) -> set[dg.AssetKey]:
+    """The assets a job actually *materializes*.
+
+    Not `get_all_asset_keys()` — a job's graph also carries the upstream assets it
+    only reads, as unexecutable nodes. `raw/retail_invoice_lines` appears in
+    `full_refresh` that way (the dbt models depend on it) even though the whole
+    point of the selection is that this job does not load it, so the wider set
+    would have made the exclusion test pass while asserting nothing.
+    """
+    from orchestration.definitions import defs
+
+    return set(defs.resolve_job_def(name).asset_layer.asset_graph.executable_asset_keys)
+
+
+def test_the_jobs_between_them_cover_every_asset():
+    """Registered is not the same as reachable, and the second one is what runs.
+
+    `full_refresh` excludes the retail *ingest* — it has to, an asset job takes
+    one partitions definition — so the exclusion has to be paid for by
+    `load_retail` rather than dropped. Anything in neither job is built by no
+    workflow.
+    """
+    from orchestration import assets
+
+    defined, _ = _defined_in_assets_module()
+    covered = _job_keys("full_refresh")
+
+    assert defined - covered == {assets.EVIDENCE_SITE}, (
+        "the Evidence site is the only asset no pure-Python job may build; "
+        f"unreachable: {sorted(k.to_user_string() for k in defined - covered)}"
+    )
+    assert assets.EVIDENCE_SITE in _job_keys("publish_site")
+
+
+def test_the_dbt_build_writes_its_run_results_where_the_reader_looks():
+    """`dbt_models` pins the target path, and `pipeline_runs` depends on it.
+
+    Left to itself dagster-dbt gives every invocation a unique target directory
+    (`target/<op>-<run id>-<uuid>/`) so concurrent invocations cannot overwrite
+    each other's artifacts. Nothing here is concurrent, and
+    `observability.build_runs` reads `run_results.json` *by path*, so without the
+    pin every orchestrated build writes `analytics.pipeline_runs` with zero rows.
+
+    This asserts the *call site* rather than the artifact: a real invocation
+    pointed at an explicit path proves dagster-dbt honours the argument, and
+    stays green when the argument is dropped.
+    """
+    from pathlib import Path
+    from typing import Any
+
+    from gold_warehouse.paths import dbt_run_results_path, dbt_target_path
+    from orchestration import assets
+
+    called_with: list[str] = []
+    kwargs_seen: dict[str, Any] = {}
+
+    class _Invocation:
+        def stream(self):
+            return iter(())
+
+    class _Dbt:
+        def cli(self, args, **kwargs):
+            called_with.extend(args)
+            kwargs_seen.update(kwargs)
+            return _Invocation()
+
+    # `decorated_fn` is the undecorated generator, so this exercises the call
+    # site with no execution harness: nothing is materialized and no output is
+    # yielded, which is exactly the part being asserted. Dagster types
+    # `compute_fn` as a union that does not narrow to the decorated half, so the
+    # annotation states the gap rather than adding a `ty: ignore`.
+    compute: Any = assets.dbt_models.op.compute_fn
+    list(compute.decorated_fn(context=None, dbt=_Dbt()))
+
+    assert called_with == ["build"]
+    target = kwargs_seen["target_path"]
+    assert Path(target) == Path(dbt_target_path())
+    # The property that actually matters, stated as the two paths agreeing: the
+    # artifact the build writes is the one `transform.pipeline_status` reads.
+    assert Path(target) / "run_results.json" == Path(dbt_run_results_path())

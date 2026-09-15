@@ -1,0 +1,10 @@
+version: 2
+
+groups:
+  - name: gold
+    description: >
+      Monthly gold prices: the landing table cleaned to the month, and the fact
+      a consumer reads.
+    owner:
+      name: Data team
+      email: owner@example.com

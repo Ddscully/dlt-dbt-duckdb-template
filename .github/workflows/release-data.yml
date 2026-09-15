@@ -1,0 +1,253 @@
+name: release-data
+
+# Publishes the built warehouse as a versioned GitHub release, so the data is
+# consumable without cloning the repo or re-running the pipeline:
+#
+#   ATTACH 'https://github.com/<owner>/<repo>/releases/latest/download/warehouse.duckdb'
+#          AS warehouse (READ_ONLY);
+#
+# Like `pages.yml` this builds from the LIVE sources — a published dataset made
+# of the 17-country fixture slice would be worse than none. `nightly.yml` is what
+# alerts when a source moves; a failure here just means the last release stands.
+#
+# Monthly, because the sources publish annually and a nightly release would be
+# thirty near-identical uploads a month. Cut one on demand
+# (`gh workflow run release-data.yml`) when a source has actually updated.
+
+on:
+  schedule:
+    # 07:10 UTC on the 1st.
+    - cron: "10 7 1 * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (default: data-YYYY-MM-DD)"
+        required: false
+        type: string
+
+permissions:
+  contents: write # creates the tag, the release and its assets
+  # Required, reason unknown: from 2026-07-30 `gh release create` returned 403
+  # "Resource not accessible by integration" with `contents: write` alone, and
+  # succeeded with these two added (the release is not immutable). The two were
+  # never isolated, so both stay.
+  id-token: write
+  attestations: write
+
+# Two runs uploading assets to the same dated tag would race.
+concurrency:
+  group: release-data
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      # The only variable this workflow owns; every `gh` call below reads it.
+      # No INGEST_FIXTURES: see the note at the top. The three paths, and the
+      # `dbt parse` the graph cannot load without, come from the setup action and
+      # `just materialize`'s own dependency chain.
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup
+
+      # The unreproducible state, in two assets: `warehouse.duckdb` (the
+      # `history` snapshots and `analytics.pipeline_runs`) and `lakehouse.tar.gz`
+      # (the weather archive, which costs more than Open-Meteo's daily budget to
+      # refetch). `publish/restore_history.py` carries both, finding the tarball
+      # beside the database, before the build — so `dbt snapshot` compares
+      # against last month and the weather archive deepens instead of
+      # cold-starting.
+      #
+      # Only "no previous release" may skip. A failed download or restore is
+      # fatal: continuing would publish emptied state that the next release
+      # would inherit.
+      - name: Carry unreproducible tables forward from the previous release
+        id: history
+        run: |
+          prev=$(gh release list --limit 30 --json tagName \
+            --jq '[.[].tagName | select(startswith("data-"))] | first // empty')
+          if [ -z "$prev" ]; then
+            echo "No previous data-* release — the snapshot starts empty."
+            echo "restored_rows=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Restoring history from $prev"
+          gh release download "$prev" --pattern warehouse.duckdb --dir prev-release
+          # `|| true`: a release cut before the asset existed has none, which `gh`
+          # reports as a failure. Safe because the verify step asserts what was
+          # carried.
+          gh release download "$prev" --pattern lakehouse.tar.gz \
+            --dir prev-release || true
+          uv run python -m publish.restore_history prev-release/warehouse.duckdb
+          uv run python - <<'PY' >> "$GITHUB_OUTPUT"
+          import sys
+
+          import duckdb
+
+          from gold_warehouse.history import carried_rows
+          from publish.restore_history import CARRIED
+
+          # Counted through `CARRIED`, the rules the restore used, so a relation
+          # added there is checked too. stdout is $GITHUB_OUTPUT, hence stderr.
+          con = duckdb.connect("data/warehouse.duckdb", read_only=True)
+          counts = carried_rows(con, CARRIED)
+          for relation, n in counts.items():
+              print(f"carried {relation}: {n:,} rows", file=sys.stderr)
+          print(f"restored_rows={sum(counts.values())}")
+
+          # The landing zone separately: it is outside the database, and either
+          # asset can go missing silently on its own.
+          from lake import lakehouse
+
+          weather = lakehouse.carried_rows()
+          print(f"carried lakehouse: {weather:,} rows", file=sys.stderr)
+          print(f"restored_lakehouse_rows={weather}")
+          PY
+          rm -rf prev-release
+
+      # ingest -> dbt build + test -> Polars, in asset-graph order. dbt's data
+      # and unit tests run inside `dbt build`, so a warehouse that fails them
+      # never reaches the release.
+      - name: Build the warehouse from live sources
+        run: just materialize
+
+      # Writes data/export/: the DuckDB copy, a Parquet per modelled table,
+      # manifest.json, SHA256SUMS, ATTRIBUTION.md and the release body.
+      - name: Package the artifact
+        id: export
+        # The tag goes through the environment, not interpolated into the
+        # script: it is a string a human typed into the dispatch form.
+        #
+        # PII_SALT pseudonymises `customer_id` in the artifact. Stable across
+        # releases, so a consumer can follow a customer between releases and
+        # tell a restatement from a re-salting. Unset, the export fails rather
+        # than publishing clear identifiers (`docs/DATA_PROTECTION.md`).
+        env:
+          TAG_INPUT: ${{ inputs.tag }}
+          PII_SALT: ${{ secrets.PII_SALT }}
+        run: |
+          if [ -n "$TAG_INPUT" ]; then
+            uv run python -m publish.export_warehouse --tag "$TAG_INPUT"
+          else
+            uv run python -m publish.export_warehouse
+          fi
+          echo "tag=$(jq -r .tag data/export/manifest.json)" >> "$GITHUB_OUTPUT"
+
+      # Check the sums, then read back out of the copy through the `warehouse`
+      # alias the release notes give (dbt's SQL is qualified with that name).
+      #
+      # This runner opens any format it wrote, so the storage version is checked
+      # as a number against the promised ceiling, and against the manifest that
+      # describes the file.
+      - name: Verify the artifact
+        working-directory: data/export
+        env:
+          RESTORED_ROWS: ${{ steps.history.outputs.restored_rows }}
+          RESTORED_LAKEHOUSE_ROWS: ${{ steps.history.outputs.restored_lakehouse_rows }}
+          # `publish/` is a plain top-level directory, not an installed package,
+          # and this step runs from `data/export`, so it needs the checkout on
+          # the path (`gold_warehouse` imports from anywhere).
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          sha256sum -c SHA256SUMS
+          uv run --project "$GITHUB_WORKSPACE" python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          import duckdb
+
+          from gold_warehouse.export import storage_version
+          from gold_warehouse.history import carried_rows
+          from publish.export_warehouse import (
+              MAX_PUBLISHED_STORAGE_VERSION,
+              MIN_READER_VERSION,
+          )
+          from publish.restore_history import CARRIED
+
+          manifest = json.loads(Path("manifest.json").read_text())
+          on_disk = storage_version(Path("warehouse.duckdb"))
+          claimed = manifest["storage_version"]
+          assert on_disk == claimed, (
+              f"manifest claims storage version {claimed}, the file is {on_disk}"
+          )
+          assert on_disk <= MAX_PUBLISHED_STORAGE_VERSION, (
+              f"storage version {on_disk} is above the published ceiling "
+              f"{MAX_PUBLISHED_STORAGE_VERSION}; the notes promise DuckDB "
+              f"{MIN_READER_VERSION}+ can open this file"
+          )
+          print(
+              f"warehouse.duckdb: storage version {on_disk}, written by DuckDB "
+              f"{manifest['duckdb_version']}, readable by {MIN_READER_VERSION}+"
+          )
+
+          con = duckdb.connect()
+          con.execute("attach 'warehouse.duckdb' as warehouse (read_only)")
+          for relation in (
+              "warehouse.staging.stg_gold_prices",
+              "warehouse.marts.fct_gold_price_month",
+              "'marts__fct_gold_price_month.parquet'",
+          ):
+              (rows,) = con.execute(f"select count(*) from {relation}").fetchone()
+              assert rows > 0, f"{relation} is empty"
+              print(f"{relation}: {rows:,} rows")
+
+          # The landing zone must be in the release and can only grow; without
+          # it every check above passes and the next release cold-starts the
+          # weather archive.
+          # Only a project that publishes landing tables owes the release a
+          # lakehouse asset; one with an empty allowlist writes none, by design.
+          from lake.lakehouse import PUBLISHED_TABLES
+
+          published = manifest["lakehouse"]
+          if PUBLISHED_TABLES:
+              assert published["file"], (
+                  "no lakehouse asset in this release: the landing zone was not "
+                  "published, so the next release cold-starts what it carries"
+              )
+              carried = int(os.environ.get("RESTORED_LAKEHOUSE_ROWS") or 0)
+              assert published["rows"] >= carried, (
+                  f"published lakehouse holds {published['rows']:,} rows, fewer than "
+                  f"the {carried:,} carried in"
+              )
+              print(f"{published['file']}: {published['rows']:,} rows")
+
+          # Carried state can only grow; less than was restored means the
+          # restore never reached the build. Counted through `CARRIED`, as
+          # `restored_rows` was.
+          restored = int(os.environ.get("RESTORED_ROWS") or 0)
+          counts = carried_rows(con, CARRIED, database="warehouse")
+          for relation, n in counts.items():
+              print(f"warehouse.{relation}: {n:,} rows")
+          rows = sum(counts.values())
+          assert rows >= restored, (
+              f"carried state shrank: {rows:,} rows, {restored:,} restored"
+          )
+          print(f"carried forward: {rows:,} rows total ({restored:,} restored)")
+          PY
+
+      # The notes are the release body, so they move out of the way and
+      # everything left in data/export/ becomes an asset. `--clobber` on the
+      # upload path so a same-day re-run replaces that day's assets rather than
+      # failing on "asset already exists".
+      - name: Publish the release
+        env:
+          TAG: ${{ steps.export.outputs.tag }}
+        run: |
+          mv data/export/RELEASE_NOTES.md release-notes.md
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file release-notes.md
+            gh release upload "$TAG" data/export/* --clobber
+          else
+            gh release create "$TAG" data/export/* \
+              --target "$GITHUB_SHA" \
+              --title "Warehouse snapshot ${TAG#data-}" \
+              --notes-file release-notes.md
+          fi
+          {
+            echo "## [$TAG](https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG)"
+            cat release-notes.md
+          } >> "$GITHUB_STEP_SUMMARY"

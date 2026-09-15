@@ -1,0 +1,626 @@
+"""`pages.yml`'s path allowlist classifies every tracked file, both ways.
+
+That workflow is a full ingest -> dbt -> Polars -> Evidence run against the live
+public APIs, so a docs-only push should not trigger it. The filter is an
+allowlist rather than `paths-ignore`, because the dashboard *is* markdown
+(`reports/pages/`) and a blanket `**.md` ignore would stop republishing the site
+exactly when a page changed. But a hand-maintained allowlist can omit a new
+build input in silence, and the only symptom is a site that stops moving.
+
+So every tracked file must be claimed by exactly one side: the allowlist in the
+workflow, or `NOT_A_SITE_INPUT` below. A new path claimed by neither is a red
+test asking someone to decide.
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+from fnmatch import fnmatchcase
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+PAGES_WORKFLOW = REPO_ROOT / ".github/workflows/pages.yml"
+CI_WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
+
+# Tracked paths the published site is *not* built from. Every one of these has
+# a reason, and the reason is never "it is markdown" — `reports/pages/*.md` is
+# the dashboard.
+NOT_A_SITE_INPUT = (
+    "docs/**",  # prose about the warehouse, read by people not by the build
+    "tests/**",  # this job runs no tests; ci.yml does
+    "data/**",  # a .gitkeep; everything real under it is gitignored
+    ".agents/**",  # agent skills, for every agent
+    ".claude/**",  # Claude Code's plugin settings, and the skills symlink
+    "README.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "LICENSE",
+    ".gitignore",
+    ".pre-commit-config.yaml",  # lint gates, and this job does not lint
+    ".sqlfluff",
+    ".github/dependabot.yml",
+    # Community-health files: the front door for contributors, not the build.
+    ".github/CODE_OF_CONDUCT.md",
+    ".github/CONTRIBUTING.md",
+    ".github/PULL_REQUEST_TEMPLATE.md",
+    ".github/ISSUE_TEMPLATE/**",
+    # `.github/actions/**` is on the *allow* side, not here: the setup action
+    # installs the toolchain and exports the paths this build runs under, so a
+    # change to it changes the site. So is `justfile`: the build is
+    # `just materialize-site`.
+    #
+    # The other three workflows. Listed one by one rather than as
+    # `.github/workflows/*`: a *new* workflow should land here unclassified and
+    # make someone say whether the site is built from it.
+    ".github/workflows/ci.yml",
+    ".github/workflows/nightly.yml",
+    ".github/workflows/release-data.yml",
+    # One-off scripts: the seed builders (their output is the checked-in seeds,
+    # so the site moves when `dbt/**` does), `record_fixtures.py` (this job runs
+    # live) and `measure_disclosure_risk.py` (read-only).
+    "scripts/**",
+)
+
+
+def pages_allowlist() -> list[str]:
+    """The `paths:` entries under `on: push:` in `pages.yml`.
+
+    Scanned rather than parsed with PyYAML, which is not a declared dependency
+    — it arrives as dbt's transitive (see the pyarrow bullet in the
+    `dependency-versions` skill for why that matters). The block is a flat list
+    of quoted scalars, so a scan can read it, and the first test below is the
+    vacuity guard.
+    """
+    lines = PAGES_WORKFLOW.read_text().splitlines()
+    if "    paths:" not in lines:
+        # Deliberately empty rather than raising: an empty read is exactly what
+        # the vacuity guard is written to notice, and its message names the
+        # problem where a bare ValueError traceback would not.
+        return []
+    start = lines.index("    paths:")
+    found = []
+    for line in lines[start + 1 :]:
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        if not stripped.startswith("- "):
+            break  # dedented out of the list — the next key
+        found.append(stripped[2:].strip().strip('"').strip("'"))
+    return found
+
+
+def tracked_files() -> list[str]:
+    out = subprocess.run(
+        ["git", "ls-files"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return out.stdout.split()
+
+
+def _matches(path: str, pattern: str) -> bool:
+    # GitHub's `dir/**` matches everything under `dir`; fnmatch's `*` crosses
+    # `/` already, so the two agree on the shapes used here. `fnmatchcase`
+    # because plain `fnmatch` takes the platform's case rules and this
+    # comparison must not differ between a mac and the runner.
+    return fnmatchcase(path, pattern)
+
+
+def test_the_scan_reads_the_block_it_thinks_it_does():
+    """Vacuity guard: an empty or truncated read makes every test below pass."""
+    allow = pages_allowlist()
+    assert len(allow) >= 10, f"pages.yml paths: block read as {allow}"
+    assert "reports/**" in allow, "the site's own source is not in its allowlist"
+    assert not any(p.startswith("-") or p.endswith(":") for p in allow), allow
+
+
+def test_every_tracked_file_is_claimed_by_exactly_one_side():
+    allow = pages_allowlist()
+    unclassified, both = [], []
+    for path in tracked_files():
+        built_from = [p for p in allow if _matches(path, p)]
+        excluded = [p for p in NOT_A_SITE_INPUT if _matches(path, p)]
+        if built_from and excluded:
+            both.append(path)
+        elif not built_from and not excluded:
+            unclassified.append(path)
+
+    assert not unclassified, (
+        "tracked paths neither in pages.yml's `paths:` allowlist nor in "
+        "NOT_A_SITE_INPUT — decide whether the published site is built from "
+        f"them: {sorted(unclassified)}"
+    )
+    # Overlap is not a harmless duplicate. A deny pattern that also covers an
+    # allowed path would keep this file green if the allow entry were deleted,
+    # which is the drift the whole test exists to catch.
+    assert not both, f"claimed by both lists, so neither is load-bearing: {sorted(both)}"
+
+
+@pytest.mark.parametrize("side", ["allow", "deny"])
+def test_no_pattern_has_outlived_the_path_it_named(side):
+    """The stale direction, which nothing else could surface.
+
+    A rename fires the *unclassified* assertion above and never reaches this
+    one — the new path is uncovered, so the first test wins and the orphaned
+    pattern measures nothing. Isolating the stale branch takes its own
+    assertion.
+    """
+    patterns = pages_allowlist() if side == "allow" else list(NOT_A_SITE_INPUT)
+    tracked = tracked_files()
+    orphaned = [p for p in patterns if not any(_matches(f, p) for f in tracked)]
+    assert not orphaned, f"{side} patterns matching no tracked file: {orphaned}"
+
+
+# --------------------------------------------------------------------------- #
+# ci.yml re-runs the manifest-gated tests, and that list is hand-maintained too
+# --------------------------------------------------------------------------- #
+
+
+# Anchored at column 0, so it matches a real module-level `pytestmark` and not a
+# file that merely mentions one — this module writes both strings itself.
+_GATED = re.compile(
+    r"^pytestmark\s*=\s*pytest\.mark\.skipif\((?:.|\n)*?manifest_path", re.MULTILINE
+)
+
+
+def manifest_gated() -> set[str]:
+    """Test files that skip themselves when `dbt/target/manifest.json` is absent."""
+    return {
+        path.name
+        for path in (REPO_ROOT / "tests").glob("test_*.py")
+        if _GATED.search(path.read_text())
+    }
+
+
+def re_run_after_parse() -> set[str]:
+    """The files `ci.yml` names once the manifest exists.
+
+    The unit-test step is a bare `uv run pytest` with nothing after it, so it
+    contributes nothing here — which is the point: that is the run where these
+    files skip.
+    """
+    named = re.findall(r"uv run pytest ([^\n]+)", CI_WORKFLOW.read_text())
+    return {Path(arg).name for line in named for arg in line.split()}
+
+
+def test_every_manifest_gated_test_file_is_re_run_after_dbt_parse():
+    """A file that skips itself in CI's first step and is not named in its second
+    runs **nowhere** in CI, and nothing says so.
+
+    The skips show in every build log and read as normal; the silence is in the
+    step that should pick the files back up.
+
+    Compared as a set both ways, so adding a gated file without adding it to
+    the workflow fails, and removing one from the workflow while it still skips
+    fails too.
+    """
+    gated, re_run = manifest_gated(), re_run_after_parse()
+    assert gated == re_run, (
+        "ci.yml's post-parse pytest step and the manifest-gated test files disagree.\n"
+        f"  gated but never re-run (they run nowhere in CI): {sorted(gated - re_run)}\n"
+        f"  re-run but not gated (harmless, but the list is now wrong): {sorted(re_run - gated)}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# A release is two assets, and a workflow that restores one must download both
+# --------------------------------------------------------------------------- #
+
+
+WORKFLOWS_DIR = REPO_ROOT / ".github/workflows"
+
+
+def release_restoring_workflows() -> dict[str, str]:
+    """`{"pages.yml": "<text>", …}` — the workflows that carry a release forward."""
+    return {
+        path.name: path.read_text()
+        for path in sorted(WORKFLOWS_DIR.glob("*.yml"))
+        if "publish.restore_history" in path.read_text()
+    }
+
+
+def downloaded_assets(text: str) -> set[str]:
+    """Every `--pattern <asset>` a workflow asks `gh release download` for."""
+    return set(re.findall(r"--pattern\s+(\S+)", text))
+
+
+def test_every_workflow_that_restores_a_release_downloads_both_of_its_assets():
+    """A release is a database *and* a landing zone, and taking only the first is silent.
+
+    `restore_history` finds the lakehouse beside the database rather than being
+    told where it is, so a workflow that downloads `warehouse.duckdb` alone hands
+    it a directory with no tarball in it — which is the module's documented
+    "restoring nothing is a normal outcome" path, not an error. Nothing fails.
+
+    The cost shows one layer down. `raw` lives in the DuckLake catalog, so the
+    database alone carries no weather rows: `weather_watermark()` reads null,
+    the ingest cold-starts at `WEATHER_COLD_START_YEARS`, and
+    `marts.fct_country_weather_year` is built three years deep instead of the
+    release's full archive. The Weather page renders correctly off the thin
+    mart — green build, green checks, right shape, wrong depth.
+
+    The asset names come from the code rather than from string literals here, so
+    renaming either one fails this instead of quietly matching nothing.
+    """
+    from publish import restore_history
+
+    required = {Path(restore_history.DUCKDB_PATH).name, restore_history.LAKEHOUSE_ASSET}
+    workflows = release_restoring_workflows()
+
+    # The scan reads workflow text, so it has to be shown to find something —
+    # rename the module and an empty result would pass every assertion below.
+    assert {"pages.yml", "release-data.yml"} <= set(workflows), (
+        f"the restore scan found {sorted(workflows)}; both of those restore a release"
+    )
+
+    missing = {
+        name: sorted(required - downloaded_assets(text))
+        for name, text in workflows.items()
+        if not required <= downloaded_assets(text)
+    }
+    assert not missing, (
+        "workflows that restore a release but do not download all of it: "
+        f"{missing}\nEach asset needs its own `gh release download --pattern` line."
+    )
+
+
+# --------------------------------------------------------------------------- #
+# The pipeline environment is defined once, in the setup action
+# --------------------------------------------------------------------------- #
+
+
+SETUP_ACTION = REPO_ROOT / ".github/actions/setup/action.yml"
+
+# The three paths every layer resolves itself from. Absolute, and the first one
+# is load-bearing rather than tidy — see the action's own comment.
+PIPELINE_PATHS = ("WAREHOUSE_PATH", "LAKEHOUSE_DIR", "DAGSTER_HOME")
+
+
+def _uncommented(text: str) -> str:
+    """Workflow text with whole-line comments dropped.
+
+    `pages.yml` names `DAGSTER_HOME` in prose — explaining that
+    `.dagster/dagster.yaml` is a build input — and a scan that cannot tell a
+    mention from an assignment would either fail on that sentence or be widened
+    until it stopped seeing assignments too.
+    """
+    return "\n".join(line for line in text.splitlines() if not line.strip().startswith("#"))
+
+
+def _assigns(text: str, name: str) -> bool:
+    """`NAME: value` as a YAML key, or `NAME=value` in a run block."""
+    return re.search(rf"^\s*{name}\s*[:=]", _uncommented(text), re.MULTILINE) is not None
+
+
+def test_the_setup_action_defines_every_pipeline_path():
+    """Vacuity guard, and it comes first: the two tests below assert an *absence*.
+
+    If the action stopped exporting these the workflows would be clean of them,
+    both of the assertions below would pass, and every job would run against
+    `profiles.yml`'s relative default — which resolves to the same file until the
+    day something runs from another directory.
+    """
+    action = SETUP_ACTION.read_text()
+    missing = [name for name in PIPELINE_PATHS if f"{name}=$GITHUB_WORKSPACE" not in action]
+    assert not missing, (
+        f"{SETUP_ACTION.name} no longer exports {missing}; the absence tests below "
+        "would then pass while nothing sets them at all"
+    )
+
+
+def test_no_workflow_defines_a_pipeline_path_itself():
+    """One definition, in the setup action, so a new path reaches every workflow.
+
+    Four copies drift: a new variable lands in some and not others. For
+    `LAKEHOUSE_DIR` that is loud but misplaced — DuckLake compares `data_path`
+    as a *string*, so dlt (from the repo root) and dbt (from `dbt/`) spelling
+    one directory two ways is refused inside `dbt build`, a layer downstream of
+    the cause. A workflow setting one of these again is not wrong on its own; it
+    is a second definition, which is how the first one drifts.
+    """
+    offenders = {
+        path.name: [name for name in PIPELINE_PATHS if _assigns(path.read_text(), name)]
+        for path in sorted(WORKFLOWS_DIR.glob("*.yml"))
+    }
+    offenders = {name: found for name, found in offenders.items() if found}
+    assert not offenders, (
+        f"workflows defining a pipeline path themselves: {offenders}\n"
+        "These come from .github/actions/setup, which is the one place they are stated."
+    )
+
+
+def test_every_workflow_that_runs_the_pipeline_uses_the_setup_action():
+    """The other direction, and the one an absence test cannot reach.
+
+    Dropping the `uses:` line makes a workflow inherit nothing: no `just` on
+    PATH, no paths exported, and `profiles.yml`'s relative default quietly
+    standing in for the two that matter. Nothing above notices, because a
+    workflow that defines none of them is exactly what those tests want to see.
+    """
+    runners = {
+        path.name
+        for path in sorted(WORKFLOWS_DIR.glob("*.yml"))
+        if "just materialize" in path.read_text()
+    }
+    assert runners == {"ci.yml", "nightly.yml", "pages.yml", "release-data.yml"}, (
+        f"the scan for pipeline-running workflows found {sorted(runners)}; all four run it"
+    )
+    missing = sorted(
+        name
+        for name in runners
+        if "./.github/actions/setup" not in (WORKFLOWS_DIR / name).read_text()
+    )
+    assert not missing, f"workflows running the pipeline without the setup action: {missing}"
+
+
+# --------------------------------------------------------------------------- #
+# Dependabot watches the composite action, not just the workflows
+# --------------------------------------------------------------------------- #
+
+
+DEPENDABOT = REPO_ROOT / ".github/dependabot.yml"
+ACTIONS_DIR = REPO_ROOT / ".github/actions"
+
+
+def composite_actions_with_dependencies() -> set[str]:
+    """`{"/.github/actions/setup"}` — local actions that pin a third-party one.
+
+    An action with no `uses:` of its own has nothing for Dependabot to bump and
+    is not this test's business.
+    """
+    return {
+        f"/.github/actions/{path.parent.name}"
+        for path in ACTIONS_DIR.glob("*/action.yml")
+        if re.search(r"^\s*(-\s*)?uses:", path.read_text(), re.MULTILINE)
+    }
+
+
+def dependabot_action_directories() -> list[str]:
+    """The `directory`/`directories` values on the `github-actions` entry.
+
+    Scanned rather than parsed, for `pages_allowlist`'s reason: PyYAML is not a
+    declared dependency.
+    """
+    lines = DEPENDABOT.read_text().splitlines()
+    found: list[str] = []
+    in_entry = in_list = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("- package-ecosystem:"):
+            in_entry = "github-actions" in stripped
+            in_list = False
+            continue
+        if not in_entry or stripped.startswith("#"):
+            continue
+        if stripped.startswith("directory:"):
+            found.append(stripped.split(":", 1)[1].strip().strip("\"'"))
+        elif stripped.startswith("directories:"):
+            in_list = True
+        elif in_list and stripped.startswith("- "):
+            found.append(stripped[2:].strip().strip("\"'"))
+        elif in_list:
+            in_list = False
+    return found
+
+
+def test_the_dependabot_scan_reads_the_entry_it_thinks_it_does():
+    """Vacuity guard, first for the reason the pages one is: the test below
+    asserts a *covering*, and an empty read covers nothing but also finds nothing
+    to cover if the actions scan is empty too."""
+    assert "/" in dependabot_action_directories(), (
+        "the github-actions entry in dependabot.yml no longer yields `/`; the scan "
+        "has stopped matching the file rather than the file having changed"
+    )
+    assert composite_actions_with_dependencies(), (
+        "no composite action with a `uses:` was found; either they are gone or the "
+        "scan is looking in the wrong place"
+    )
+
+
+def test_dependabot_watches_every_composite_action_that_pins_one():
+    """A bare `directory: /` scans `.github/workflows/` and nothing else.
+
+    So a composite action's exactly-pinned `uses:` — `astral-sh/setup-uv` in
+    `.github/actions/setup` — is unwatched unless its directory is listed:
+    still pinned, frozen, and nothing goes red.
+
+    `setup-uv` is the one that makes it matter: it stopped publishing moving
+    major tags at v8, so a Dependabot PR is the only thing that can bump it
+    (see the `dependency-versions` skill).
+    """
+    watched = dependabot_action_directories()
+    unwatched = sorted(
+        directory
+        for directory in composite_actions_with_dependencies()
+        if not any(_matches(directory.lstrip("/"), pattern.lstrip("/")) for pattern in watched)
+    )
+    assert not unwatched, (
+        f"composite actions Dependabot cannot see: {unwatched}\n"
+        "Add the directory (or a glob covering it) to the github-actions entry's "
+        "`directories:` list in .github/dependabot.yml."
+    )
+
+
+JUSTFILE = REPO_ROOT / "justfile"
+
+# Running any of these writes to the warehouse or the landing zone. The set is
+# derived from what a recipe *does*, not from a list of recipe names, so a new
+# writing recipe is covered without anyone remembering to add it.
+WRITING_COMMANDS = (
+    "python -m ingest.pipeline",
+    "python -m transform.",
+    "python -m publish.restore_history",
+    "dbt build",
+    "dagster job execute",
+    "dagster asset materialize",
+)
+
+# `name:`, `name dep:` or `name arg='': dep` at column 0. The lookahead keeps
+# `set dotenv-load := true` and `export LAKEHOUSE_DIR := …` out: those are
+# assignments, and `:=` is the only thing separating them from a recipe header.
+_RECIPE_HEADER = re.compile(r"^(?P<name>[a-z][a-z0-9-]*)(?P<params>[^:\n]*):(?!=)(?P<deps>.*)$")
+
+
+def just_recipes() -> dict[str, tuple[str, str]]:
+    """recipe name -> (its dependency list, its body)."""
+    recipes: dict[str, tuple[str, str]] = {}
+    name: str | None = None
+    deps = ""
+    body: list[str] = []
+    for line in JUSTFILE.read_text().splitlines():
+        header = _RECIPE_HEADER.match(line)
+        if header:
+            if name is not None:
+                recipes[name] = (deps, "\n".join(body))
+            name, deps, body = header["name"], header["deps"], []
+        elif name is not None and (line.startswith((" ", "\t")) or not line.strip()):
+            body.append(line)
+        elif line.startswith("#"):
+            continue
+        else:
+            if name is not None:
+                recipes[name] = (deps, "\n".join(body))
+            name, deps, body = None, "", []
+    if name is not None:
+        recipes[name] = (deps, "\n".join(body))
+    return recipes
+
+
+def writing_recipes() -> dict[str, tuple[str, str]]:
+    return {
+        name: parts
+        for name, parts in just_recipes().items()
+        if any(command in parts[1] for command in WRITING_COMMANDS)
+    }
+
+
+def test_the_justfile_scan_finds_the_recipes_it_thinks_it_does():
+    """Vacuity guard, and it comes first.
+
+    The test below iterates over whatever this scan returns, so a regex that
+    matched nothing — or that swallowed `export LAKEHOUSE_DIR := …` as a recipe
+    — would pass it by having nothing to check.
+    """
+    recipes = just_recipes()
+    assert "where" in recipes, "the announcing recipe itself is missing"
+    assert "export" not in recipes, "`:=` assignments are being read as recipes"
+    writing = writing_recipes()
+    assert {"ingest", "dbt-build", "materialize", "test-pipeline"} <= set(writing), (
+        f"the writing-recipe scan found only {sorted(writing)}"
+    )
+
+
+def test_every_recipe_that_writes_says_where_it_is_writing():
+    """dbt's only "where am I" line names the *target*, and there is one target
+    here on purpose (`dbt/profiles.yml` argues it), so that line is a constant.
+    What varies is the file, and no dbt output prints it.
+
+    So a recipe that writes either depends on `where`, or exports its own
+    `WAREHOUSE_PATH` and announces that itself — `test-pipeline` and the two
+    course recipes do the latter, and taking `where` as a dependency there would
+    print the *outer* value, which is worse than printing nothing.
+    """
+    silent = []
+    for name, (deps, body) in sorted(writing_recipes().items()):
+        if "where" in deps.split():
+            continue
+        if "export WAREHOUSE_PATH" in body:
+            continue
+        silent.append(name)
+    assert not silent, (
+        f"these recipes write to the warehouse or the landing zone without saying "
+        f"where: {silent}. Add `where` as their first dependency, or export "
+        f"WAREHOUSE_PATH in the body and echo it as `test-pipeline` does."
+    )
+
+
+def test_both_ways_of_announcing_are_actually_in_use():
+    """The test above passes a recipe on either of two conditions, so a tree
+    where every writing recipe took the same route would leave the other branch
+    unexercised and free to rot."""
+    by_dependency, by_own_export = [], []
+    for name, (deps, body) in writing_recipes().items():
+        (by_dependency if "where" in deps.split() else by_own_export).append(name)
+    assert by_dependency, "no recipe depends on `where`"
+    assert by_own_export, "no recipe exports its own WAREHOUSE_PATH any more"
+
+
+def test_every_recipe_that_writes_refuses_a_dbt_dotenv():
+    """dbt 1.12 loads `dbt/.env` for any variable a recipe leaves unset, so a
+    writing recipe must reach `_no-dbt-dotenv` — through `where`, which depends
+    on it, or directly. The recipes that export their own WAREHOUSE_PATH skip
+    `where` and repeat the dependency by hand, and the announcing test above
+    passes a new one without it."""
+    guard = "_no-dbt-dotenv"
+    assert guard in just_recipes()["where"][0].split(), (
+        f"`where` no longer depends on `{guard}`, so no recipe that depends on "
+        f"`where` is guarded against dbt/.env"
+    )
+    unguarded = sorted(
+        name
+        for name, (deps, _) in writing_recipes().items()
+        if not {"where", guard} & set(deps.split())
+    )
+    assert not unguarded, (
+        f"these recipes write without refusing a dbt/.env: {unguarded}. Add "
+        f"`where` as their first dependency or, if they export WAREHOUSE_PATH, "
+        f"`{guard}`."
+    )
+
+
+def _recipe(name: str) -> str:
+    """The body of one `just` recipe, from its header to the next blank-line gap.
+
+    Read as text rather than by running `just --evaluate`: the assertions here
+    are about what the recipe *says*, and a recipe that has stopped exporting
+    something evaluates perfectly well.
+    """
+    lines = (REPO_ROOT / "justfile").read_text().splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith(f"{name}:"))
+    body: list[str] = []
+    for line in lines[start + 1 :]:
+        if line and not line.startswith((" ", "\t", "#")):
+            break
+        body.append(line)
+    return "\n".join(body)
+
+
+def test_the_fixture_pipeline_isolates_every_piece_of_state_it_touches():
+    """`just test-pipeline` must not leave anything behind for the next real run.
+
+    Four overrides, each for a leak that was observed:
+
+    * `WAREHOUSE_PATH` — without it a fixture run overwrites the real warehouse
+      with the 17-country slice.
+    * `LAKEHOUSE_DIR` — dlt *lands* in the lakehouse, so without it the slice
+      merges into a landing zone holding a weather archive no rebuild affords.
+    * `DBT_RUN_RESULTS_PATH` (with `--target-path`) — dbt writes its artifacts
+      to `dbt/target/` wherever the build pointed, and `analytics.pipeline_runs`
+      records whatever that file last held, so the next `just pipeline-status`
+      would file the fixture timings in the real warehouse's build history.
+    * `DBT_MANIFEST_PATH` — the same directory, so the test inventory reads the
+      fixture build's manifest rather than a real one alongside it.
+
+    Asserted as a set rather than by reading the recipe's behaviour, because
+    each is invisible when missing: the fixture run still passes, and what
+    breaks is the *next* command against real data.
+    """
+    recipe = _recipe("test-pipeline")
+    for variable in (
+        "WAREHOUSE_PATH",
+        "LAKEHOUSE_DIR",
+        "DBT_RUN_RESULTS_PATH",
+        "DBT_MANIFEST_PATH",
+    ):
+        assert f"export {variable}=" in recipe, (
+            f"`just test-pipeline` no longer overrides {variable}, so a fixture run "
+            f"leaks that state into the next command that reads it"
+        )
+    # The env var alone is not enough: dbt has to be told to *write* there too,
+    # or the override points at a file the build never creates.
+    assert '--target-path "$DBT_TARGET_PATH"' in recipe

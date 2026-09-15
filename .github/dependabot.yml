@@ -1,0 +1,57 @@
+version: 2
+
+# Green CI says nothing about outdated versions, so something has to watch them.
+# The three ecosystems below are the ones with a pinned version in the tree.
+# Monthly and grouped — one open PR per ecosystem — to match the release cadence
+# rather than trickle single-dependency PRs.
+
+updates:
+  # `astral-sh/setup-uv` is pinned to an exact patch (it stopped publishing
+  # moving major tags at v8), so it can only ever be bumped by something like
+  # this. The rest track major tags and move on their own within a major.
+  #
+  # **`directories`, plural**: `directory: /` scans only `.github/workflows/`,
+  # and the `setup-uv` pin lives in the composite action, where it would freeze
+  # unnoticed. A glob, so a second composite action is covered too.
+  # `tests/test_workflows.py` asserts the pair.
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/*
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 1
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # uv.lock is committed, so a lockfile refresh is a reviewable diff rather than
+  # something that silently differs between a contributor's machine and CI.
+  #
+  # `lockfile-only` because the bounds in pyproject.toml are minimum-supported
+  # versions, not pins (`duckdb>=1.1` sits far below what resolves). The default
+  # strategy raises the lower bound on every upstream release instead.
+  - package-ecosystem: uv
+    directory: /
+    versioning-strategy: lockfile-only
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 1
+    groups:
+      python:
+        patterns: ["*"]
+
+  # Evidence and its adapters. `reports/`, not the root — that's where
+  # package.json and package-lock.json live.
+  #
+  # Deliberately *not* lockfile-only, unlike uv above: these are `^` ranges, so
+  # the major is the pin and an Evidence 40 -> 41 bump is a real upgrade worth
+  # seeing as a PR. Lockfile-only would silently cap the site at 40.x forever.
+  - package-ecosystem: npm
+    directory: /reports
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 1
+    groups:
+      evidence:
+        patterns: ["*"]

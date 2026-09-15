@@ -1,0 +1,78 @@
+name: ci
+
+# Fast, deterministic, offline. Every network call the pipeline makes is served
+# from `tests/fixtures/ingest/` (see ingest/fixtures.py), so a red build here
+# means this repo broke — not that OWID was rate-limiting. The live sources are
+# exercised once a day by `nightly.yml` instead.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # The only variable this workflow owns. The three paths come from the
+      # setup action, which is the single definition of them.
+      INGEST_FIXTURES: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup
+        with:
+          groups: --group dev --group orchestration
+
+      # Mocked-payload unit tests over the parsing logic: retry/raise, WDI
+      # pagination, the Eurostat stride walk, the Polars transform.
+      - name: Unit tests
+        run: uv run pytest
+
+      # Parses the dbt manifest and resolves the whole asset graph, so a broken
+      # ref, a renamed source or a dangling asset key fails before any I/O.
+      #
+      # The test files that need the manifest `dbt parse` writes; they skip in
+      # the step above. `tests/test_workflows.py` holds this list to the files
+      # that skip, since a gated file missing here would run nowhere in CI.
+      # `validate` cannot see an asset that was never registered;
+      # `test_definitions.py` can.
+      - name: Validate Dagster definitions
+        run: |
+          just dbt-parse
+          uv run dagster definitions validate -m orchestration.definitions
+          uv run pytest tests/test_definitions.py tests/test_asset_checks.py tests/test_documented_counts.py tests/test_additivity.py tests/test_bus_matrix.py
+
+      # Runs ingest -> dbt build + test -> Polars in asset-graph order, and
+      # evaluates the asset checks alongside dbt's tests — all against fixtures.
+      #
+      # The recipe is the definition of what a pipeline run *is*: two jobs in
+      # order, because an asset job takes one partitions definition and the
+      # retail ingest is monthly where wb_wdi is yearly. All four workflows call
+      # it, so `just materialize` on a laptop is the same run.
+      - name: Materialize the asset graph
+        run: just materialize
+
+      # The publish path (`release-data.yml`) against the fixture warehouse: a
+      # renamed schema or a copy whose views don't survive fails here, on a pull
+      # request, rather than on the first of the month.
+      - name: Package the release artifact
+        # The exporter requires a salt even here. A literal, because this
+        # artifact is never published; `release-data.yml` passes the secret.
+        env:
+          PII_SALT: ci-not-a-release-salt
+        run: |
+          uv run python -m publish.export_warehouse
+          cd data/export && sha256sum -c SHA256SUMS
+
+      # The recipe, so the linted paths are defined once and CI agrees with the
+      # commit hook (the `sqlfluff-lint` hook runs the same recipe).
+      - name: Lint SQL
+        run: just lint
+
+      # ruff, formatting and whitespace. The same hooks contributors get from
+      # `uv run pre-commit install`, run here because an outside PR arrives
+      # from a clone where nobody ran that. Last, since it's the cheapest
+      # failure to fix and the least interesting one to learn about first.
+      - name: Pre-commit hooks
+        run: uv run pre-commit run --all-files --show-diff-on-failure

@@ -1,0 +1,56 @@
+name: Set up the pipeline
+description: >
+  uv, the project venv, `just`, and the three paths every layer resolves itself
+  from. The single definition of the CI environment for all four workflows.
+
+# `tests/test_workflows.py` asserts that every pipeline workflow uses this and
+# that none defines the paths itself.
+
+inputs:
+  groups:
+    description: >
+      Dependency groups to sync, as flags. `ci.yml` and `nightly.yml` need
+      `dev` for pytest and sqlfluff; `pages.yml` and `release-data.yml` only
+      run the graph.
+    required: false
+    default: "--group orchestration"
+
+runs:
+  using: composite
+  steps:
+    # Pinned to the exact patch: setup-uv stopped publishing moving major/minor
+    # tags at v8, so `@v10` does not resolve. Dependabot watches this directory
+    # and bumps it (.github/dependabot.yml).
+    - name: Install uv
+      uses: astral-sh/setup-uv@v10.1.0
+      with:
+        enable-cache: true
+
+    - name: Sync deps
+      shell: bash
+      run: uv sync ${{ inputs.groups }}
+
+    # Every workflow runs the pipeline through a `just` recipe, and pre-commit's
+    # `sqlfluff-lint` hook runs `just lint` (without `just` on PATH it fails with
+    # "Executable `just` not found").
+    - name: Install just
+      shell: bash
+      run: |
+        uv tool install rust-just
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+    # Absolute, all three. `LAKEHOUSE_DIR` must be: DuckLake compares the
+    # catalog's `data_path` as a string on every attach, and dlt (repo root) and
+    # dbt (`dbt/`) would otherwise spell it differently — `DATA_PATH parameter
+    # "../data/lakehouse/data/" does not match existing data path`, from
+    # `dbt build`. `WAREHOUSE_PATH` is set too, so nothing depends on
+    # `paths.project_root()`'s fallbacks. `$GITHUB_WORKSPACE` is
+    # `justfile_directory()` here, so these match what `just` would export.
+    - name: Export the pipeline paths
+      shell: bash
+      run: |
+        {
+          echo "WAREHOUSE_PATH=$GITHUB_WORKSPACE/data/warehouse.duckdb"
+          echo "LAKEHOUSE_DIR=$GITHUB_WORKSPACE/data/lakehouse"
+          echo "DAGSTER_HOME=$GITHUB_WORKSPACE/.dagster"
+        } >> "$GITHUB_ENV"

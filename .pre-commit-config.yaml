@@ -1,0 +1,32 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.7
+    hooks:
+      # `ruff` is a legacy alias for this as of 0.12; both still work.
+      - id: ruff-check
+        args: [--fix]
+      # Scoped here rather than inherited: upstream's hook added `markdown` to
+      # these types within 0.16.x, which reformats the code blocks in `docs/`.
+      - id: ruff-format
+        types_or: [python, pyi, jupyter]
+
+  # The recipe, not the upstream sqlfluff hook: that installs its own sqlfluff,
+  # which drifts from the one pinned in pyproject.toml, and runs from the repo
+  # root, where the dbt templater resolves profiles.yml's `../data/…` one
+  # directory too high. `pass_filenames: false` because the recipe lints the whole
+  # tree; `files` decides whether it runs.
+  - repo: local
+    hooks:
+      - id: sqlfluff-lint
+        name: sqlfluff-lint (just lint)
+        entry: just lint
+        language: system
+        pass_filenames: false
+        files: ^dbt/(models|snapshots)/.*\.sql$
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml

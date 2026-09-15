@@ -1,0 +1,30 @@
+{
+  "extraKnownMarketplaces": {
+    "dbt-agent-marketplace": {
+      "source": { "source": "github", "repo": "dbt-labs/dbt-agent-skills" }
+    },
+    "dagster": {
+      "source": { "source": "github", "repo": "dagster-io/skills" }
+    },
+    "polars": {
+      "source": { "source": "github", "repo": "polars-inc/skills" }
+    },
+    "modern-data-stack": {
+      "source": { "source": "directory", "path": "./.claude/marketplace" }
+    },
+    "astral-sh": {
+      "source": { "source": "github", "repo": "astral-sh/claude-code-plugins" }
+    }
+  },
+  "enabledPlugins": {
+    "dbt@dbt-agent-marketplace": true,
+    "ty-lsp@modern-data-stack": true,
+    "skill-creator@claude-plugins-official": true
+  },
+  "permissions": {
+    "allow": [
+      "Bash(just test)",
+      "Bash(just test-pipeline)"
+    ]
+  }
+}

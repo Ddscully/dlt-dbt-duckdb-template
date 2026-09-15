@@ -1,0 +1,20 @@
+version: 2
+
+sources:
+  - name: raw
+    description: >
+      Landing tables loaded by the dlt pipeline, in the DuckLake catalog under
+      data/lakehouse/ — not in the DuckDB file. `database: lakehouse` is the
+      ATTACH alias from profiles.yml and from `lake.lakehouse.ATTACH_ALIAS`;
+      the three have to agree or dbt cannot resolve a single source.
+    database: lakehouse
+    schema: raw
+    loaded_at_field: "to_timestamp(cast(_dlt_load_id as double))"
+    freshness:
+      warn_after: {count: 7, period: day}
+      error_after: {count: 40, period: day}
+    tables:
+      - name: gold_prices_monthly
+        description: >
+          datasets/gold-prices, one row per month since 1833: `date` as `YYYY-MM`
+          text and `price` in US dollars per troy ounce.
