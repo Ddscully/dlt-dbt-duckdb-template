@@ -105,7 +105,7 @@ def source_tables(sources_dir: Path = SOURCES_DIR) -> set[str]:
 
 
 def source_query_tables(sources_dir: Path = SOURCES_DIR) -> dict[str, set[str]]:
-    """`{"warehouse.emissions_energy": {"marts.fct_emissions_energy"}, …}`.
+    """`{"warehouse.gold_price_month": {"marts.fct_gold_price_month"}, …}`.
 
     Per query rather than per project, which is the resolution `page_tables` needs:
     Evidence pages name *queries*, and only the query knows which warehouse table

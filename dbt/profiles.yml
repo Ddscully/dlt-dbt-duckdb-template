@@ -2,8 +2,7 @@
 #
 # `raw` lives in the DuckLake catalog dlt writes, attached as `lakehouse`
 # (`_sources.yml` declares `database: lakehouse`; change both or neither).
-# Everything dbt builds goes into the DuckDB file, which is what the release
-# publishes.
+# Everything dbt builds goes into the DuckDB file.
 #
 # WAREHOUSE_PATH and LAKEHOUSE_DIR override the two paths. Set them absolute:
 # this file resolves relative paths from `dbt/`, the Python layers from the repo
@@ -11,10 +10,10 @@
 #
 # One target, deliberately. On Snowflake or BigQuery a target separates schemas
 # inside one database; here WAREHOUSE_PATH swaps the whole database file, and
-# `macros/generate_schema_name.sql` keeps schema names identical everywhere so
-# `marts.fct_emissions_energy` resolves the same locally, in CI and in the
-# release. More targets would differ in name only. Porting to a real warehouse?
-# Add them — see `docs/REUSING_THIS_STACK.md`.
+# `macros/generate_schema_name.sql` keeps schema names identical everywhere, so
+# `marts.fct_gold_price_month` resolves the same on a laptop and in CI. More
+# targets would differ in name only. Porting to a real warehouse is where they
+# start earning their keep — add them then.
 my_warehouse:
   target: dev
   outputs:

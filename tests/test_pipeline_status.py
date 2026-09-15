@@ -39,10 +39,10 @@ def warehouse(tmp_path):
     # `_dlt_load_id` is a varchar holding a unix epoch — 2021-01-01T00:00:00Z.
     con.sql(
         """
-        create table lakehouse.raw.owid_co2 as
-        select * from (values ('USA', 2020, '1609459200.0'),
-                              ('KEN', 2021, '1609459200.0'))
-        as t(iso_code, year, _dlt_load_id)
+        create table lakehouse.raw.gold_prices_monthly as
+        select * from (values ('2020-01', 2020, '1609459200.0'),
+                              ('2021-01', 2021, '1609459200.0'))
+        as t(date, year, _dlt_load_id)
         """
     )
     con.sql("detach lakehouse")
@@ -50,21 +50,21 @@ def warehouse(tmp_path):
     con.sql("create schema marts")
     con.sql(
         """
-        create table marts.fct_emissions_energy as
-        select * from (values ('USA', 2020, 5000.0), ('KEN', 2021, 19.0))
-        as t(country_iso3, year, co2_mt)
+        create table marts.fct_gold_price_month as
+        select * from (values ('2020-01-01', 2020, 1770.0), ('2021-01-01', 2021, 1867.0))
+        as t(month_start, year, price_usd_per_troy_oz)
         """
     )
 
     con.sql("create schema dbt_test__audit")
     # A passing test leaves an empty table behind; a failing one leaves rows.
     con.sql(
-        "create table dbt_test__audit.not_null_fct_emissions_energy_co2_mt (country_iso3 varchar)"
+        "create table dbt_test__audit.not_null_fct_gold_price_month_price_usd_per_troy_oz (month_start varchar)"
     )
     con.sql(
         """
-        create table dbt_test__audit.dbt_utils_accepted_range_fct_e_abc123 as
-        select * from (values ('KEN', 2021)) as t(country_iso3, year)
+        create table dbt_test__audit.dbt_utils_accepted_range_fct_g_abc123 as
+        select * from (values ('2021-01-01', 2021)) as t(month_start, year)
         """
     )
     con.close()
@@ -73,27 +73,30 @@ def warehouse(tmp_path):
 
 @pytest.fixture(autouse=True)
 def _one_source_table(monkeypatch):
-    monkeypatch.setattr(pipeline_status, "SOURCE_TABLES", ("owid_co2",))
+    monkeypatch.setattr(pipeline_status, "SOURCE_TABLES", ("gold_prices_monthly",))
     monkeypatch.setattr(pipeline_status, "LAYERS", ("marts",))
 
 
 def _range_node():
     return {
         "resource_type": "test",
-        "name": "dbt_utils_accepted_range_fct_emissions_energy_co2_mt__0",
-        "alias": "dbt_utils_accepted_range_fct_e_abc123",
-        "attached_node": "model.demo.fct_emissions_energy",
-        "test_metadata": {"name": "accepted_range", "kwargs": {"column_name": "co2_mt"}},
+        "name": "dbt_utils_accepted_range_fct_gold_price_month_price_usd_per_troy_oz__0",
+        "alias": "dbt_utils_accepted_range_fct_g_abc123",
+        "attached_node": "model.demo.fct_gold_price_month",
+        "test_metadata": {
+            "name": "accepted_range",
+            "kwargs": {"column_name": "price_usd_per_troy_oz"},
+        },
     }
 
 
 def _not_null_node():
     return {
         "resource_type": "test",
-        "name": "not_null_fct_emissions_energy_co2_mt",
-        "alias": "not_null_fct_emissions_energy_co2_mt",
-        "attached_node": "model.demo.fct_emissions_energy",
-        "test_metadata": {"name": "not_null", "kwargs": {"column_name": "co2_mt"}},
+        "name": "not_null_fct_gold_price_month_price_usd_per_troy_oz",
+        "alias": "not_null_fct_gold_price_month_price_usd_per_troy_oz",
+        "attached_node": "model.demo.fct_gold_price_month",
+        "test_metadata": {"name": "not_null", "kwargs": {"column_name": "price_usd_per_troy_oz"}},
     }
 
 
@@ -113,10 +116,10 @@ def manifest(tmp_path):
                 "nodes": {
                     "test.demo.range": _range_node(),
                     "test.demo.nn": _not_null_node(),
-                    "model.demo.fct_emissions_energy.v1": {
+                    "model.demo.fct_gold_price_month.v1": {
                         "resource_type": "model",
-                        "name": "fct_emissions_energy",
-                        "alias": "fct_emissions_energy_v1",
+                        "name": "fct_gold_price_month",
+                        "alias": "fct_gold_price_month_v1",
                     },
                 }
             }
@@ -140,7 +143,7 @@ def test_sources_resolve_the_dlt_epoch(warehouse):
         con.close()
 
     row = frame.to_dicts()[0]
-    assert row["source_table"] == "raw.owid_co2"
+    assert row["source_table"] == "raw.gold_prices_monthly"
     assert row["rows"] == 2
     assert (row["year_min"], row["year_max"]) == (2020, 2021)
     # The varchar epoch became a real timestamp, not a string or a 1970 date.
@@ -155,7 +158,7 @@ def test_tables_report_rows_and_year_span(warehouse):
         con.close()
 
     row = frame.to_dicts()[0]
-    assert row["table_name"] == "marts.fct_emissions_energy"
+    assert row["table_name"] == "marts.fct_gold_price_month"
     assert row["rows"] == 2
     assert (row["year_min"], row["year_max"]) == (2020, 2021)
 
@@ -175,9 +178,9 @@ def test_an_empty_exclude_prefix_excludes_nothing(warehouse):
     finally:
         con.close()
 
-    assert default["table_name"].to_list() == ["marts.fct_emissions_energy"]
+    assert default["table_name"].to_list() == ["marts.fct_gold_price_month"]
     assert everything["table_name"].to_list() == [
-        "marts.fct_emissions_energy",
+        "marts.fct_gold_price_month",
         "marts.pipeline_tables",
     ]
 
@@ -196,40 +199,43 @@ def test_tests_split_pass_from_fail(warehouse, manifest):
     # The manifest turns the truncated alias back into the real test name and
     # the model it guards; without it the table name is the only label there is.
     failing = by_status["fail"]
-    assert failing["test_name"].startswith("dbt_utils_accepted_range_fct_emissions_energy")
-    assert failing["tested_model"] == "fct_emissions_energy"
-    assert failing["tested_column"] == "co2_mt"
+    assert failing["test_name"].startswith("dbt_utils_accepted_range_fct_gold_price_month")
+    assert failing["tested_model"] == "fct_gold_price_month"
+    assert failing["tested_column"] == "price_usd_per_troy_oz"
     assert failing["audit_table"].startswith("dbt_test__audit.")
 
 
 def test_a_test_on_a_versioned_model_is_labelled_with_the_relation_not_the_version():
     """`attached_node` for a versioned model ends in `.v1`, not in the model name.
 
-    Splitting on the final dot labels every test on `fct_emissions_energy`
+    Splitting on the final dot labels every test on `fct_gold_price_month`
     **`v1`** or **`v2`**. The alias is the relation the test ran against, so it
     agrees with `pipeline_tables` one section above.
     """
     nodes = {
-        "model.demo.fct_emissions_energy.v1": {
-            "name": "fct_emissions_energy",
-            "alias": "fct_emissions_energy_v1",
+        "model.demo.fct_gold_price_month.v1": {
+            "name": "fct_gold_price_month",
+            "alias": "fct_gold_price_month_v1",
         },
-        "model.demo.fct_emissions_energy.v2": {
-            "name": "fct_emissions_energy",
-            "alias": "fct_emissions_energy",
+        "model.demo.fct_gold_price_month.v2": {
+            "name": "fct_gold_price_month",
+            "alias": "fct_gold_price_month",
         },
     }
 
     assert (
-        observability.node_display_name("model.demo.fct_emissions_energy.v1", nodes)
-        == "fct_emissions_energy_v1"
+        observability.node_display_name("model.demo.fct_gold_price_month.v1", nodes)
+        == "fct_gold_price_month_v1"
     )
     assert (
-        observability.node_display_name("model.demo.fct_emissions_energy.v2", nodes)
-        == "fct_emissions_energy"
+        observability.node_display_name("model.demo.fct_gold_price_month.v2", nodes)
+        == "fct_gold_price_month"
     )
     # A test can attach to a source, which is not in `nodes` — hence the fallback.
-    assert observability.node_display_name("source.demo.raw.owid_co2", {}) == "owid_co2"
+    assert (
+        observability.node_display_name("source.demo.raw.gold_prices_monthly", {})
+        == "gold_prices_monthly"
+    )
     assert observability.node_display_name("", {}) is None
 
 
@@ -251,7 +257,7 @@ def test_an_audit_table_the_manifest_does_not_name_is_dropped_as_stale(warehouse
 
     # The `not_null` audit table exists in the warehouse but not in the manifest.
     assert frame.height == 1
-    assert frame.to_dicts()[0]["tested_model"] == "fct_emissions_energy"
+    assert frame.to_dicts()[0]["tested_model"] == "fct_gold_price_month"
 
 
 def _equal_rowcount_case(tmp_path, diff_count):
@@ -342,12 +348,12 @@ def test_a_warn_severity_test_with_failures_is_not_called_a_failure(warehouse, t
                 "nodes": {
                     "test.demo.range": {
                         "resource_type": "test",
-                        "name": "dbt_utils_accepted_range_fct_emissions_energy_co2_mt__0",
-                        "alias": "dbt_utils_accepted_range_fct_e_abc123",
-                        "attached_node": "model.demo.fct_emissions_energy",
+                        "name": "dbt_utils_accepted_range_fct_gold_price_month_price_usd_per_troy_oz__0",
+                        "alias": "dbt_utils_accepted_range_fct_g_abc123",
+                        "attached_node": "model.demo.fct_gold_price_month",
                         "test_metadata": {
                             "name": "accepted_range",
-                            "kwargs": {"column_name": "co2_mt"},
+                            "kwargs": {"column_name": "price_usd_per_troy_oz"},
                         },
                         "config": {"severity": "warn"},
                     }
@@ -364,7 +370,7 @@ def test_a_warn_severity_test_with_failures_is_not_called_a_failure(warehouse, t
     finally:
         con.close()
 
-    warned = rows["dbt_test__audit.dbt_utils_accepted_range_fct_e_abc123"]
+    warned = rows["dbt_test__audit.dbt_utils_accepted_range_fct_g_abc123"]
     assert warned["failing_rows"] == 1
     assert warned["severity"] == "warn"
     assert warned["status"] == "warn"
@@ -426,7 +432,7 @@ def run_results(tmp_path):
                 "args": {"which": "build"},
                 "results": [
                     {
-                        "unique_id": "model.demo.fct_emissions_energy.v1",
+                        "unique_id": "model.demo.fct_gold_price_month.v1",
                         "status": "success",
                         "execution_time": 1.5,
                         "timing": [
@@ -443,7 +449,7 @@ def run_results(tmp_path):
                         ],
                     },
                     {
-                        "unique_id": "test.demo.not_null_stg_co2_year.abc123",
+                        "unique_id": "test.demo.not_null_stg_gold_prices_price_month.abc123",
                         "status": "pass",
                         "execution_time": 0.25,
                         "timing": [],
@@ -461,15 +467,15 @@ def test_a_run_row_is_labelled_with_the_relation_not_the_version(run_results):
     Both versioned nodes appear in `run_results.json`, so a `build_runs` that
     split the unique id by hand would file the model's own timing under **`v1`**
     — next to a `pipeline_tables` row calling the same relation
-    `fct_emissions_energy_v1`. Sharing `node_display_name` keeps the two
+    `fct_gold_price_month_v1`. Sharing `node_display_name` keeps the two
     sections of the page agreeing.
     """
     nodes = {
-        "model.demo.fct_emissions_energy.v1": {"alias": "fct_emissions_energy_v1"},
+        "model.demo.fct_gold_price_month.v1": {"alias": "fct_gold_price_month_v1"},
     }
     named = observability.build_runs(str(run_results), nodes)
     assert named.filter(named["resource_type"] == "model")["node_name"].to_list() == [
-        "fct_emissions_energy_v1"
+        "fct_gold_price_month_v1"
     ]
 
     # Without the manifest it degrades to the id's last segment, the version:
@@ -577,4 +583,4 @@ def test_the_wired_builder_reads_the_manifest_for_its_node_names(manifest, run_r
     """
     frame = pipeline_status.build_runs(str(manifest), str(run_results))
     models = frame.filter(frame["resource_type"] == "model")
-    assert models["node_name"].to_list() == ["fct_emissions_energy_v1"]
+    assert models["node_name"].to_list() == ["fct_gold_price_month_v1"]

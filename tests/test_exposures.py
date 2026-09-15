@@ -121,7 +121,7 @@ def test_the_release_exposure_names_every_mart():
     discover by reading the site, which is why it is asserted rather than described.
     """
     declared = declared_models("published_data_release")
-    # `fct_emissions_energy_v1.sql` / `_v2.sql` are two files and one model: an
+    # A versioned model's `_v1.sql` / `_v2.sql` are two files and one model: an
     # exposure names the model, and `ref()` without a `v=` resolves to the latest
     # version. Both relations ship in the release, and both are covered by the one
     # declaration.
