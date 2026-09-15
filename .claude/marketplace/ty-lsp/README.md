@@ -6,21 +6,12 @@ type diagnostics and go-to-definition instead of grep.
 
 ## Why this is a repo-local plugin
 
-There is no published ty plugin — the official marketplace has 286 of them and
-none for anything Astral ships. `pyright-lsp@claude-plugins-official` exists and
-was the obvious alternative; it was measured against this tree and rejected:
-
-| | ty 0.0.74 | pyright |
-|---|---|---|
-| diagnostics here | 38 | 45 errors + 2 warnings |
-| wall time | 0.32 s | 4.83 s |
-| found `.venv` unaided | yes | no — 54 phantom missing-imports until pointed at it |
-| install | `uv add --group dev` → pinned in `uv.lock` | `npm install -g pyright`, unpinned and global |
-
-The install row is the one that decided it. An unpinned global Node binary that
-no lockfile in this repo can see is the same shape as the sqlfluff 3.3.0/4.2.2
-split that once made `just lint` pass and the commit hook fail — see the dev
-group in `pyproject.toml`.
+There is no published ty plugin, and a language server is a ten-line
+`.lsp.json`. `pyright-lsp@claude-plugins-official` is the obvious alternative
+and was rejected on one row: it installs as `npm install -g pyright`, an
+unpinned global binary no lockfile in this repo can see, where ty comes from the
+dev group and is pinned in `uv.lock`. A checker whose version the project cannot
+state is a checker that will one day disagree with CI.
 
 ## Why the command is `uv run ty`, not `ty`
 
@@ -29,17 +20,20 @@ one in `uv.lock`; `uv run` resolves the locked version. The cost is that the
 server has to be launched with the project root as its working directory, which
 is what `uv run` walks up from to find `pyproject.toml`.
 
-## It has to outrank `astral@astral-sh`
+## It has to outrank any other plugin claiming `.py`
 
-Astral publishes its own plugin (uv/ruff/ty skills, enabled here) and it ships a
-ty language server too — `uvx ty@latest server`, the newest published ty on every
-launch. This one is `uv run ty server`, the version in `uv.lock`.
+Astral publishes its own plugin, and it ships a ty language server too —
+`uvx ty@latest server`, the newest published ty on every launch. This one is
+`uv run ty server`, the version in `uv.lock`.
 
-Both claim `.py`; the first loaded wins and the loser is a `[WARN]` nobody sees.
-The order is the order of `enabledPlugins` in `.claude/settings.json`, where
-`ty-lsp` sits above `astral` — and `astral` sorts first alphabetically, so
-tidying that block would quietly swap them. `tests/test_plugin_settings.py`
-fails if it does.
+Both would claim `.py`; **the first loaded wins and the loser is a `[WARN]`
+nobody sees**. The order is the order of `enabledPlugins` in
+`.claude/settings.json`, so enabling such a plugin means putting it *below*
+`ty-lsp` — and alphabetical tidying of that block would quietly swap them. The
+symptom is subtle: the editor showing findings `just typecheck` cannot
+reproduce. Check with `claude --debug -p ok` and
+`grep 'already handled by' ~/.claude/debug/latest`; no output is the passing
+state.
 
 ## Install
 

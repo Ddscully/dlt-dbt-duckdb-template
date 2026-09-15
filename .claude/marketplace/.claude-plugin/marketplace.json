@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "modern-data-stack",
-  "description": "Repo-local plugins for this warehouse. Everything else this project uses is a published vendor plugin declared in ../settings.json; this marketplace exists for the pieces that have no upstream to install from.",
+  "description": "Repo-local plugins for this project. Everything else is a published vendor plugin declared in ../settings.json; this marketplace exists for the pieces that have no upstream to install from.",
   "owner": { "name": "Daniel Scully" },
   "plugins": [
     {
