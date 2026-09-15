@@ -29,8 +29,6 @@ from dagster_dbt import DagsterDbtTranslator, DbtCliResource, dbt_assets, get_as
 from dagster_dlt import DagsterDltResource, DagsterDltTranslator, dlt_assets
 from dagster_dlt.translator import DltResourceTranslatorData
 
-from modern_data_stack.db import scalar
-from modern_data_stack.paths import dbt_run_results_path, dbt_target_path, warehouse_path
 from ingest.pipeline import (
     FULL_REFRESH_RESOURCES,
     INCREMENTAL_RESOURCES,
@@ -39,6 +37,8 @@ from ingest.pipeline import (
     load_groups,
     public_indicators,
 )
+from modern_data_stack.db import scalar
+from modern_data_stack.paths import dbt_run_results_path, dbt_target_path, warehouse_path
 from orchestration.resources import dbt_project
 from publish.build_report import (
     BUILD_DIR,

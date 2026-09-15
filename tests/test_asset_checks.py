@@ -28,8 +28,8 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from modern_data_stack.ducklake import attach
 from lake.lakehouse import ATTACH_ALIAS, catalog_path, data_path
+from modern_data_stack.ducklake import attach
 from orchestration.resources import dbt_project
 
 # Importing `orchestration.assets` needs the manifest, which does not exist when

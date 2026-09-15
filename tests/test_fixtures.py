@@ -11,9 +11,9 @@ import re
 
 import pytest
 
-from modern_data_stack import fixtures as _fixtures
 from ingest import fixtures, pipeline
 from ingest.sources.gold import GOLD_PRICES_MONTHLY
+from modern_data_stack import fixtures as _fixtures
 
 ALL_URLS = [GOLD_PRICES_MONTHLY]
 

@@ -14,11 +14,8 @@ a check here that holds the list to the tree.
 from __future__ import annotations
 
 import re
-import subprocess
 from fnmatch import fnmatchcase
 from pathlib import Path
-
-import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS_DIR = REPO_ROOT / ".github/workflows"
@@ -33,6 +30,7 @@ def _matches(path: str, pattern: str) -> bool:
     it so the two can be compared by eye.
     """
     return fnmatchcase(path, pattern) or fnmatchcase(path, pattern.rstrip("*").rstrip("/") + "/*")
+
 
 # --------------------------------------------------------------------------- #
 # ci.yml re-runs the manifest-gated tests, and that list is hand-maintained too

@@ -22,8 +22,8 @@ from __future__ import annotations
 import duckdb
 import pytest
 
-from modern_data_stack.ducklake import attach, revisions, table_versions
 from lake import lakehouse
+from modern_data_stack.ducklake import attach, revisions, table_versions
 
 TABLE = "raw.gold_prices_monthly"
 

@@ -26,10 +26,10 @@ from __future__ import annotations
 import duckdb
 import polars as pl
 
+from lake.lakehouse import ATTACH_ALIAS, LAKEHOUSE_DIR, catalog_path, data_path, is_catalog
 from modern_data_stack import db, observability
 from modern_data_stack.ducklake import attach
 from modern_data_stack.paths import dbt_manifest_path, dbt_run_results_path, warehouse_path
-from lake.lakehouse import ATTACH_ALIAS, LAKEHOUSE_DIR, catalog_path, data_path, is_catalog
 
 DUCKDB_PATH = warehouse_path()
 

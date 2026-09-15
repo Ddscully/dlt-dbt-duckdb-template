@@ -4,17 +4,17 @@ config-version: 2
 
 profile: "my_warehouse"
 
-# Keep the deprecation date the release notes promise. When
-# `fct_emissions_energy_v1`'s `deprecation_date` (2026-11-01) passes, dbt by
-# default logs a warning and exits 0 (measured); promoted, it fails `dbt parse`,
-# CI's cheapest step.
+# A model version's `deprecation_date` is a promise to whoever reads it. Once
+# the date passes, dbt by default logs a warning and exits 0; promoted here, it
+# fails `dbt parse` — CI's cheapest step — so a migration window that has run out
+# cannot be ignored.
 #
 # * `DeprecatedModel` — the date has passed (fires at parse, on the producer).
 # * `DeprecatedReference` — a `ref` to a model past its date.
 #
 # `UpcomingReferenceDeprecation` stays a warning: a ref inside the migration
-# window is what the window is for. Not `error: all`, which would fail the
-# monthly release on any warning a future dbt adds.
+# window is what the window is for. Not `error: all`, which would fail the build
+# on any warning a future dbt adds.
 flags:
   warn_error_options:
     error:
@@ -36,13 +36,17 @@ models:
       # same group may `ref` it. The two `protected` overrides in `_staging.yml`
       # are the only places one domain reads another's cleaning layer.
       +access: private
-    intermediate:
-      # `view`, not `ephemeral`: an ephemeral model has no relation, so it cannot
-      # carry the unit tests these exist for.
-      +materialized: view
-      +schema: intermediate
-      # Each is consumed only inside its own (domain) group.
-      +access: private
+    # An `intermediate:` block goes here when models/intermediate/ exists. dbt
+    # warns on config for a directory with no models in it, so it is commented
+    # rather than left waiting:
+    #
+    #   intermediate:
+    #     # `view`, not `ephemeral`: an ephemeral model has no relation, so it
+    #     # cannot carry the unit tests these exist for.
+    #     +materialized: view
+    #     +schema: intermediate
+    #     # Each is consumed only inside its own group.
+    #     +access: private
     marts:
       +materialized: table
       +schema: marts
@@ -55,10 +59,13 @@ models:
         +group: gold
 
 
-snapshots:
-  my_warehouse:
-    # The one schema no rebuild can reproduce.
-    +schema: history
+# Uncomment with the first snapshot; dbt warns about config that applies to
+# nothing. A snapshot is *state*: it cannot be recomputed, and deleting
+# data/warehouse.duckdb destroys it, so keep snapshots narrow.
+#
+# snapshots:
+#   my_warehouse:
+#     +schema: history
 
 data_tests:
   # Each test's failing rows land in `dbt_test__audit.<test alias>`, so a red

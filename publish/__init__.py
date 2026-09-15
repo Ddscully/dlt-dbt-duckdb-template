@@ -1,19 +1,15 @@
 """The boundary between this repo and everyone downstream of it.
 
-Three modules that either produce an artifact someone else consumes or read the
-last one back:
+Two modules that produce something another person reads:
 
-* `build_report.py` — the Evidence site.
-* `export_warehouse.py` — the monthly data release: the DuckDB copy, the Parquet
-  files, the lakehouse tarball, checksums and notes. This is where the personal
-  data policy is applied and where the storage-format ceiling is enforced, which
-  is the whole reason it is a layer and not a helper.
-* `restore_history.py` — the previous release's unreproducible tables, carried
-  forward so the snapshot accumulates a real revision log and the weather
-  archive keeps deepening.
+* `build_report.py` — the Evidence site: the npm commands in the order the
+  dashboard needs them, wrapped so `just report` and the `reports/evidence_site`
+  asset cannot run different builds.
+* `bus_matrix.py` — the conformed-dimension matrix in `docs/WAREHOUSE.md`,
+  derived from the dbt manifest and never written by hand.
 
-They were in `scripts/` until 2026-09-01, which made `orchestration/assets.py`
-import the top of its own dependency graph out of a directory named for one-off
-utilities. What is left in `scripts/` is genuinely one-off: seed transcription,
-fixture re-recording, a disclosure measurement.
+A layer rather than a directory of helpers, because what leaves the project is
+where a policy applies: what may be published, under what licence, with which
+columns named. A project that publishes its warehouse adds that module here, and
+`scripts/` stays for what is genuinely one-off.
 """
