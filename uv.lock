@@ -841,7 +841,7 @@ wheels = [
 ]
 
 [[package]]
-name = "gold-warehouse"
+name = "my-warehouse"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

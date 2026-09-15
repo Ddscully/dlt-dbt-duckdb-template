@@ -15,9 +15,9 @@ import duckdb
 import polars as pl
 import pytest
 
-from gold_warehouse import db, observability
-from gold_warehouse.db import scalar
-from gold_warehouse.ducklake import attach
+from modern_data_stack import db, observability
+from modern_data_stack.db import scalar
+from modern_data_stack.ducklake import attach
 from transform import pipeline_status
 
 

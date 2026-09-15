@@ -5,7 +5,7 @@ from __future__ import annotations
 from dagster_dbt import DbtCliResource, DbtProject
 from dagster_dlt import DagsterDltResource
 
-from gold_warehouse.paths import dbt_dir
+from modern_data_stack.paths import dbt_dir
 
 DBT_DIR = dbt_dir()
 

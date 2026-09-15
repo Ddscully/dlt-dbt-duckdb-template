@@ -1,6 +1,6 @@
 """The pipeline as a Dagster asset graph.
 
-    raw/*  (dlt -> DuckLake)  ->  staging/stg_*  ->  marts/*  (dbt)  +->  analytics/pipeline_status
+    raw/*  (dlt -> DuckLake)  ->  staging/stg_*  ->  marts/*  (dbt)  +->  analytics/*  (Polars)
                                                                     +->  reports/evidence_site  (Evidence)
 
 The layers are wired by *asset key*, not by ordering:
@@ -29,8 +29,8 @@ from dagster_dbt import DagsterDbtTranslator, DbtCliResource, dbt_assets, get_as
 from dagster_dlt import DagsterDltResource, DagsterDltTranslator, dlt_assets
 from dagster_dlt.translator import DltResourceTranslatorData
 
-from gold_warehouse.db import scalar
-from gold_warehouse.paths import dbt_run_results_path, dbt_target_path, warehouse_path
+from modern_data_stack.db import scalar
+from modern_data_stack.paths import dbt_run_results_path, dbt_target_path, warehouse_path
 from ingest.pipeline import (
     FULL_REFRESH_RESOURCES,
     INCREMENTAL_RESOURCES,
@@ -47,6 +47,7 @@ from publish.build_report import (
     page_routes,
     run as build_report,
 )
+from transform.gold_price_trend import run as run_gold_price_trend
 from transform.pipeline_status import run as run_pipeline_status
 
 DUCKDB_PATH = str(warehouse_path())
@@ -189,9 +190,29 @@ def dbt_models(context: AssetExecutionContext, dbt: DbtCliResource):
 
 
 @dg.asset(
+    key=dg.AssetKey(["analytics", "gold_price_trend"]),
+    # The one mart it reads, by name: a Polars asset that depended on the whole
+    # dbt build would serialise behind models it never touches.
+    deps=[get_asset_key_for_model([dbt_models], "fct_gold_price_month")],
+    group_name="analytics",
+    kinds={"polars", "duckdb"},
+    freshness_policy=MODELLED_FRESHNESS,
+    description=(
+        "The rolling twelve-month average gold price and the change on a year "
+        "earlier, derived from `marts.fct_gold_price_month`."
+    ),
+)
+def gold_price_trend(context: AssetExecutionContext) -> dg.MaterializeResult:
+    rows = run_gold_price_trend()
+    context.log.info("wrote analytics.gold_price_trend (%s rows)", rows)
+    return dg.MaterializeResult(metadata={"dagster/row_count": rows})
+
+
+@dg.asset(
     key=dg.AssetKey(["analytics", "pipeline_status"]),
-    # Inventories every modelled layer, so it follows the whole dbt build.
-    deps=list(dbt_models.keys),
+    # Inventories every modelled layer, so it follows the whole dbt build and
+    # the Polars tables it should count the rows of.
+    deps=[*dbt_models.keys, gold_price_trend],
     group_name="analytics",
     kinds={"polars", "duckdb"},
     freshness_policy=MODELLED_FRESHNESS,
@@ -239,8 +260,7 @@ SITE_DEPS = [
     description=(
         "The Evidence dashboard as a static site in `reports/build/`: extracts "
         "the warehouse tables to parquet (`npm run sources:strict`), then renders "
-        "every page under `reports/pages/` against them. Published by "
-        "`.github/workflows/pages.yml`."
+        "every page under `reports/pages/` against them."
     ),
 )
 def evidence_site(context: AssetExecutionContext) -> dg.MaterializeResult:
@@ -350,6 +370,7 @@ __all__ = [
     "EVIDENCE_SITE",
     "dbt_models",
     "evidence_site",
+    "gold_price_trend",
     "pipeline_status",
     "raw_assets",
 ]

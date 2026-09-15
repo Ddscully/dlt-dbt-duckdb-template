@@ -1,49 +1,103 @@
-# gold-warehouse
+# my-warehouse
 
-Monthly gold prices since 1833, loaded, modelled and published by a small,
-local data stack:
+A template for a small, local, end-to-end analytics stack. Everything runs on
+one machine with `uv` against a single DuckDB file — no cloud warehouse, no
+containers, no accounts.
 
 ```
-dlt (EL) → DuckLake (raw) → dbt (staging/marts) → Evidence (BI)
-             all orchestrated by Dagster, against one DuckDB file
+dlt (EL) → DuckLake (raw) → dbt (staging/marts) → Polars (heavy T) → Evidence (BI)
+   data/lakehouse/            └────────▶ data/warehouse.duckdb
+                    all orchestrated by Dagster
 ```
 
-## Quick start
+It ships **one worked source end to end** — monthly gold prices, a CSV with no
+credentials — so that `just test-pipeline` and the Dagster asset graph are green
+from the first commit, and so there is a working example of each layer to copy
+rather than a skeleton to guess at.
+
+## Start
 
 ```bash
-just setup      # uv sync runtime + dev + orchestration
-just run        # ingest -> dbt build -> pipeline status
-just dagster    # ...or the same pipeline as an asset graph, UI on :3000
-just sql        # the warehouse in the DuckDB CLI, lakehouse attached
+uv tool install rust-just     # if you don't have `just`
+just setup                    # venv + the DuckLake extension
+just test-pipeline            # the whole pipeline against the recorded fixture
+just run                      # the whole pipeline against the live source
+just sql                      # poke at the result
 ```
 
-No credentials at any point. `just test-pipeline` runs the whole pipeline
-offline against recorded fixtures, into a throwaway warehouse.
-
-## Tests
+Then make it yours:
 
 ```bash
-just test           # pytest: mocked payloads, no network
-just test-pipeline  # the whole pipeline against recorded fixtures
+uv run python -m scripts.rename_project acme_metrics   # see "Renaming", below
 ```
 
-CI runs both, plus the Dagster asset graph and the asset checks, entirely
-offline. A nightly workflow runs the same graph against the live source.
+`just` on its own lists every recipe. The ones you will use most:
 
-## Where things are
+| Command | What it does |
+|---|---|
+| `just run` | ingest → dbt build → Polars → pipeline status, in shell order |
+| `just materialize` | the same pipeline ordered by the Dagster asset graph |
+| `just dagster` | the Dagster UI on :3000 — graph, runs, freshness, checks |
+| `just test` | the mocked unit tests: no network, no warehouse |
+| `just test-pipeline` | the real modules end to end against checked-in fixtures |
+| `just report` | build the Evidence dashboard (needs Node) |
+| `just where` | which warehouse file and landing zone the recipes will use |
 
-[`AGENTS.md`](./AGENTS.md) is the guide for agents and people working in the
-repo; [`docs/WAREHOUSE.md`](./docs/WAREHOUSE.md) describes the schemas,
-[`docs/ORCHESTRATION.md`](./docs/ORCHESTRATION.md) the asset graph and
-[`docs/STYLE_GUIDE.md`](./docs/STYLE_GUIDE.md) the SQL conventions.
+## What is where
 
-## License
+```
+ingest/     dlt — `sources/` is one module per publisher; `pipeline.py` is
+            coordination (which resources exist, how they group, the pipeline)
+lake/       the DuckLake landing zone, where `raw` lives
+dbt/        staging → marts, with contracts, tests and groups
+transform/  the Polars layer, for what SQL models badly
+orchestration/  the Dagster asset graph over all of the above
+publish/    the boundary outward: the Evidence site and the bus matrix
+reports/    the Evidence dashboard
+scripts/    one-off utilities: fixture recording, renaming the project
+src/modern_data_stack/   the domain-neutral mechanisms every layer calls
+tests/      two tiers — see tests/README.md
+```
 
-Code is [MIT](./LICENSE). The data is not this project's to license: the monthly
-gold prices come from [datasets/gold-prices](https://github.com/datasets/gold-prices)
-under the [ODC-PDDL 1.0](https://opendatacommons.org/licenses/pddl/1-0/) public
-domain dedication, which asks for no attribution — the release credits the
-publisher anyway, because a downloader should be able to find the source without
-reading this repository. Re-check the licence whenever a source is added: the
-release redistributes the data, which turns "we use public data" into "we
-redistribute public data", and that is an obligation of its own.
+[`docs/WAREHOUSE.md`](docs/WAREHOUSE.md) is what each schema holds and why `raw`
+is in a separate file. [`docs/STYLE_GUIDE.md`](docs/STYLE_GUIDE.md) is how the
+SQL is written. [`AGENTS.md`](AGENTS.md) is the instructions file for coding
+agents, and is worth reading as a human too — it is the short version of
+everything that bites.
+
+## Adding your own source
+
+The whole loop is the `adding-a-data-source` skill in
+[`.agents/skills/`](.agents/skills/adding-a-data-source/SKILL.md). In short: a
+dlt resource in `ingest/sources/`, a row in `_sources.yml`, a `stg_` model, a
+mart with a contract and a uniqueness test, a recorded fixture so CI stays
+offline, and a page in `reports/pages/`. Then delete the gold example.
+
+## Renaming
+
+The project name appears in `pyproject.toml`, `dbt_project.yml` (four keys),
+`dbt/profiles.yml`, the dlt pipeline name, the Dagster code location and the
+Evidence package — as `my_warehouse` and `my-warehouse`.
+`scripts/rename_project.py` replaces both spellings across every tracked file.
+
+The **package** stays `modern_data_stack` whatever the project is called:
+`[tool.uv.build-backend] module-name` in `pyproject.toml` decouples the two, so
+renaming the project does not mean rewriting every import.
+
+Two names must not be changed: the `lakehouse` ATTACH alias, which is baked into
+stored view SQL, and the `warehouse.duckdb` filename, which dbt writes into
+fully-qualified view definitions.
+
+Also yours to edit: the `authors` line in `pyproject.toml`, the owner in
+`dbt/models/_groups.yml` and `_exposures.yml`, and `LICENSE`.
+
+## Requirements
+
+- Python 3.13 (`.python-version`), via `uv`
+- `just`
+- Node 18+, but only for `just report` and the Evidence site
+
+## Licence
+
+MIT — see [LICENSE](LICENSE). The example source, monthly gold prices from
+[datasets/gold-prices](https://github.com/datasets/gold-prices), is ODC-PDDL.

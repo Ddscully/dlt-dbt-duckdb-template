@@ -18,7 +18,7 @@ import re
 
 import yaml
 
-from gold_warehouse.paths import project_root
+from modern_data_stack.paths import project_root
 from publish import build_report
 
 EXPOSURES_YML = project_root() / "dbt" / "models" / "_exposures.yml"

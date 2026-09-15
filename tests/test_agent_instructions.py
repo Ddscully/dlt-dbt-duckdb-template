@@ -32,7 +32,7 @@ import subprocess
 import pytest
 import yaml
 
-from gold_warehouse.paths import project_root
+from modern_data_stack.paths import project_root
 
 ROOT = project_root()
 AGENTS_MD = ROOT / "AGENTS.md"

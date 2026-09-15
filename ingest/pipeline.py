@@ -59,8 +59,8 @@ PIPELINE_DATASET = "raw"
 
 
 def pipeline_name() -> str:
-    """`gold_warehouse`, or `gold_warehouse_fixtures` under fixtures."""
-    return f"gold_warehouse{'_fixtures' if fixtures.enabled() else ''}"
+    """`my_warehouse`, or `my_warehouse_fixtures` under fixtures."""
+    return f"my_warehouse{'_fixtures' if fixtures.enabled() else ''}"
 
 
 def build_pipeline() -> dlt.Pipeline:

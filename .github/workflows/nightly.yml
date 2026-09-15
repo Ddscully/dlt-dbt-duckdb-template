@@ -2,14 +2,13 @@ name: nightly
 
 # The other half of the test pyramid. `ci.yml` proves the repo works against
 # recorded payloads; this proves the recorded payloads still resemble reality —
-# it runs the same asset graph against the live OWID / World Bank / Eurostat
-# endpoints and opens an issue when they've moved.
+# it runs the same asset graph against the live endpoints and opens an issue
+# when they have moved.
 #
 # Expected failure modes, all of which are worth a human looking:
 #   - a source renamed or dropped a column   -> stg_* breaks
-#   - a WDI indicator was retired            -> wdi_indicators_all_present fails
-#   - a publisher stopped updating           -> mart_covers_recent_years warns
-#   - an endpoint moved                      -> http.get_json raises
+#   - a publisher stopped updating           -> a freshness or coverage check fires
+#   - an endpoint moved                      -> the fetch raises
 #
 # When it fires, fix the pipeline and re-record with `just record-fixtures`.
 
@@ -40,9 +39,8 @@ jobs:
       - name: Materialize the asset graph against live sources
         run: just materialize
 
-      # A build artifact, not a release: handy for diffing what the live sources
-      # actually returned on the day the run went red. `release-data.yml` is the
-      # durable, versioned, publicly downloadable version of the same file.
+      # A build artifact: handy for diffing what the live sources actually
+      # returned on the day the run went red.
       - name: Upload the warehouse
         if: always()
         uses: actions/upload-artifact@v7

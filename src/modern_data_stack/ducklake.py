@@ -33,12 +33,9 @@ from .db import scalar
 
 __all__ = [
     "attach",
-    "publish",
     "revisions",
     "row_count",
-    "set_data_path",
     "snapshots",
-    "spec_version",
     "table_versions",
 ]
 
@@ -80,7 +77,7 @@ def attach(
         options.append(f"data_inlining_row_limit {int(data_inlining_row_limit)}")
 
     # ATTACH takes literals, not bind parameters — `attach $path` is a parser
-    # error — so the paths are interpolated, as they are in `history.restore`.
+    # error — so the paths are interpolated rather than bound as parameters.
     con.execute(f"attach 'ducklake:duckdb:{Path(catalog_path)}' as {alias} ({', '.join(options)})")
 
 
@@ -185,137 +182,3 @@ def _columns(con: duckdb.DuckDBPyConnection, alias: str, table: str) -> list[str
 
 def row_count(con: duckdb.DuckDBPyConnection, alias: str, table: str) -> int:
     return scalar(con, f"select count(*) from {alias}.{table}")
-
-
-def publish(
-    con: duckdb.DuckDBPyConnection,
-    source_alias: str,
-    dest_dir: str | Path,
-    tables: tuple[str, ...],
-    data_dirname: str,
-    catalog_name: str,
-    max_spec_version: str | None = None,
-) -> dict[str, int]:
-    """Build a **relocatable** DuckLake at `dest_dir` holding only `tables`.
-
-    **Built, never filtered**: DuckLake keeps dropped tables readable in earlier
-    snapshots (`at (version => …)`), so a copied-then-pruned catalog still ships
-    what was dropped. The cost is that snapshot lineage does not survive.
-
-    **Its `data_path` is relative**, so a consumer can open it with a bare
-    `ATTACH` rather than `OVERRIDE_DATA_PATH`. DuckDB resolves a relative path
-    against the process's cwd at creation, so the catalog is created absolute
-    and the `ducklake_metadata` row rewritten after; per-file paths are already
-    relative.
-
-    `max_spec_version` is the spec ceiling; no default, for `export`'s reason.
-    """
-    dest = Path(dest_dir)
-    (dest / data_dirname).mkdir(parents=True, exist_ok=True)
-    catalog = dest / catalog_name
-    if catalog.exists():
-        catalog.unlink()
-
-    attach(con, catalog, dest / data_dirname, alias="_publish")
-    copied = {}
-    try:
-        for table in tables:
-            schema, name = _split(table)
-            # Skipped, not an error: a source can predate a newly listed table,
-            # and dbt's `ATTACH IF NOT EXISTS` creates an empty catalog before
-            # the first ingest.
-            if not _exists(con, source_alias, schema, name):
-                continue
-            con.execute(f"create schema if not exists _publish.{schema}")
-            con.execute(
-                f'create table _publish.{schema}."{name}" as '
-                f'select * from {source_alias}.{schema}."{name}"'
-            )
-            copied[table] = scalar(con, f'select count(*) from _publish.{schema}."{name}"')
-    finally:
-        con.execute("detach _publish")
-
-    set_data_path(catalog, f"{data_dirname}/")
-
-    # Measured on the catalog just built — what ships, written by this machine's
-    # DuckLake, whatever the source was written with. `>`: publishing at the
-    # ceiling is ordinary. As in `export`, the directory is left for inspection.
-    published = spec_version(catalog)
-    if max_spec_version is not None and version_key(published) > version_key(max_spec_version):
-        raise ValueError(
-            f"refusing to publish {catalog.name}: DuckLake spec version "
-            f"{published}, above the {max_spec_version} this project promises. "
-            "The extension that wrote it is a binary from extensions.duckdb.org "
-            "that no lockfile can name, so nothing else in this repo can notice "
-            "the format moving. Raising the ceiling strands every consumer whose "
-            "ducklake is older than the new spec."
-        )
-    return copied
-
-
-def catalog_metadata(catalog_path: str | Path) -> dict[str, str]:
-    """Everything `ducklake_metadata` records about a catalog, as a map.
-
-    `version` is the spec a consumer needs; `created_by` the DuckDB build that
-    wrote it. Read from the catalog file directly, read-only, so it can
-    describe an unpacked artifact that nothing has attached.
-    """
-    path = Path(catalog_path)
-    try:
-        con = duckdb.connect(str(path), read_only=True)
-    except duckdb.Error as exc:  # not a database at all
-        raise ValueError(f"not a DuckLake catalog: {path}") from exc
-    try:
-        rows = con.execute("select key, value from ducklake_metadata").fetchall()
-    except duckdb.Error as exc:  # a DuckDB file, but not a catalog
-        raise ValueError(f"not a DuckLake catalog: {path}") from exc
-    finally:
-        con.close()
-    return {str(key): str(value) for key, value in rows}
-
-
-def spec_version(catalog_path: str | Path) -> str:
-    """The DuckLake spec version a catalog was written against.
-
-    The catalog counterpart of `export.storage_version`: whether a consumer can
-    open it. Returned as the string recorded (`1.0`); `version_key` orders two.
-    """
-    meta = catalog_metadata(catalog_path)
-    if "version" not in meta:
-        raise ValueError(f"DuckLake catalog with no recorded version: {catalog_path}")
-    return meta["version"]
-
-
-def version_key(version: str) -> tuple[int, ...]:
-    """A sort key for a dotted version: `1.10` above `1.9`, unlike a string."""
-    return tuple(int(part) for part in version.split("."))
-
-
-def set_data_path(catalog_path: str | Path, data_path: str) -> None:
-    """Rewrite the catalog's `data_path`, which DuckLake checks on every attach.
-
-    A published catalog wants it relative (a bare `ATTACH` wherever unpacked); a
-    working one absolute (dlt and dbt run from different directories). So it is
-    rewritten at each boundary — by `publish` on the way out, by the restoring
-    caller on the way in. Per-file paths are relative in both.
-    """
-    meta = duckdb.connect(str(Path(catalog_path)))
-    try:
-        meta.execute(
-            "update ducklake_metadata set value = $path where key = 'data_path'",
-            {"path": data_path},
-        )
-    finally:
-        meta.close()
-
-
-def _exists(con: duckdb.DuckDBPyConnection, alias: str, schema: str, name: str) -> bool:
-    return bool(
-        con.execute(
-            """
-            select 1 from information_schema.tables
-            where table_catalog = $catalog and table_schema = $schema and table_name = $table
-            """,
-            {"catalog": alias, "schema": schema, "table": name},
-        ).fetchone()
-    )

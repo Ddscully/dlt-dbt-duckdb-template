@@ -10,11 +10,11 @@ Writes four flat tables into `analytics`:
   long it took. The only one that accumulates.
 
 `reports/pages/pipeline.md` renders them. The first three are replaced each run;
-`pipeline_runs` is appended, because each invocation's artifact is overwritten by
-the next — so no rebuild can reproduce it, and `publish/restore_history.CARRIED`
-carries it between releases.
+`pipeline_runs` is appended, because each invocation's artifact is overwritten
+by the next — so no rebuild can reproduce it, and deleting the warehouse file
+destroys the history.
 
-The queries live in `gold_warehouse.observability`; this module holds the
+The queries live in `modern_data_stack.observability`; this module holds the
 project's landing tables and layer names. Run it after `dbt build`, whose audit
 schema and artifacts it reads.
 
@@ -26,10 +26,10 @@ from __future__ import annotations
 import duckdb
 import polars as pl
 
-from gold_warehouse import db, observability
-from gold_warehouse.ducklake import attach
-from gold_warehouse.paths import dbt_manifest_path, dbt_run_results_path, warehouse_path
-from lake.lakehouse import ATTACH_ALIAS, LAKEHOUSE_DIR, catalog_path, data_path
+from modern_data_stack import db, observability
+from modern_data_stack.ducklake import attach
+from modern_data_stack.paths import dbt_manifest_path, dbt_run_results_path, warehouse_path
+from lake.lakehouse import ATTACH_ALIAS, LAKEHOUSE_DIR, catalog_path, data_path, is_catalog
 
 DUCKDB_PATH = warehouse_path()
 
@@ -45,9 +45,9 @@ RUNS_TABLE = "pipeline_runs"
 # load times); dbt's bookkeeping schemas are left out.
 LAYERS = ("staging", "intermediate", "marts", "analytics", "history")
 
-# dlt's landing tables, without its `_dlt_*` bookkeeping. Those with no `year`
-# column (the country dimension; FX, retail and weather, which are date-keyed)
-# report a null span.
+# dlt's landing tables, without its `_dlt_*` bookkeeping. A table with no `year`
+# column reports a null span. `tests/test_definitions.py` holds this list to the
+# resources the dlt source actually declares.
 SOURCE_TABLES = ("gold_prices_monthly",)
 
 
@@ -94,6 +94,11 @@ def run(
     For `pipeline_runs` the count is rows added — 0 when this invocation was
     already recorded.
     """
+    if not is_catalog(lakehouse_dir):
+        raise RuntimeError(
+            f"no DuckLake catalog at {lakehouse_dir} — `raw` lives there, so there is "
+            "nothing to report on yet. Run `just ingest` first."
+        )
     con = duckdb.connect(duckdb_path)
     try:
         # `raw` lives in the lakehouse.

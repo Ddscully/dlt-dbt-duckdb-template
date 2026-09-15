@@ -40,11 +40,14 @@ def test_source_tables_reads_a_temp_directory(tmp_path: Path):
     (tmp_path / "a.sql").write_text(
         """
         -- from marts.commented_out
-        with x as (select * from RAW.owid_co2)
-        select * from x join analytics.co2_intensity using (year)
+        with x as (select * from RAW.gold_prices_monthly)
+        select * from x join analytics.gold_price_trend using (month_start)
         """
     )
-    assert build_report.source_tables(tmp_path) == {"raw.owid_co2", "analytics.co2_intensity"}
+    assert build_report.source_tables(tmp_path) == {
+        "raw.gold_prices_monthly",
+        "analytics.gold_price_trend",
+    }
 
 
 def test_page_routes_map_markdown_to_evidence_output():

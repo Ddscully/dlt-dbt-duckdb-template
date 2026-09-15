@@ -1,7 +1,7 @@
 name: Set up the pipeline
 description: >
   uv, the project venv, `just`, and the three paths every layer resolves itself
-  from. The single definition of the CI environment for all four workflows.
+  from. The single definition of the CI environment for every workflow.
 
 # `tests/test_workflows.py` asserts that every pipeline workflow uses this and
 # that none defines the paths itself.
@@ -10,8 +10,8 @@ inputs:
   groups:
     description: >
       Dependency groups to sync, as flags. `ci.yml` and `nightly.yml` need
-      `dev` for pytest and sqlfluff; `pages.yml` and `release-data.yml` only
-      run the graph.
+      `dev` for pytest and sqlfluff; a workflow that only runs the graph needs
+      the default.
     required: false
     default: "--group orchestration"
 

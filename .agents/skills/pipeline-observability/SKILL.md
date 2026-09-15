@@ -1,6 +1,6 @@
 ---
 name: pipeline-observability
-description: The pipeline's self-report — transform/pipeline_status.py and the four analytics.pipeline_* tables (sources, tables, tests, runs) that reports/pages/pipeline.md renders. How a dbt test's verdict is read from its fail_calc, why audit-table names come from the manifest, why stale audit tables are dropped, and why pipeline_runs is an appended, carried history that must find dbt's run_results.json. Use when editing transform/pipeline_status.py, the pipeline page, the run_history_records_this_build check, or when pipeline_runs or pipeline_tests look empty or wrong.
+description: The pipeline's self-report — transform/pipeline_status.py and the four analytics.pipeline_* tables (sources, tables, tests, runs) that reports/pages/pipeline.md renders. How a dbt test's verdict is read from its fail_calc, why audit-table names come from the manifest, why stale audit tables are dropped, and why pipeline_runs is an appended history that must find dbt's run_results.json. Use when editing transform/pipeline_status.py, the pipeline page, the run_history_records_this_build check, or when pipeline_runs or pipeline_tests look empty or wrong.
 ---
 
 # Pipeline observability (`transform/pipeline_status.py`)
@@ -28,11 +28,11 @@ inventories `analytics` and must land after everything it counts.
 ## `pipeline_runs` is a history
 
 It is appended (`db.append_frame`), never replaced: `run_results.json` holds only
-the latest invocation. The insert is idempotent on `invocation_id`, and a `Carry`
-rule in `CARRIED` (`publish/restore_history.py`) carries it between releases —
-the first rule to name its tables, because the rest of `analytics` is rebuilt
-every run. That makes it the third table no rebuild can reproduce, beside the two
-snapshots in `history`.
+the latest invocation, so every build overwrites the artifact the previous one
+was read from. The insert is idempotent on `invocation_id`. That makes it a table
+no rebuild can reproduce, unlike the rest of `analytics`: a project that carries
+state between builds — restoring a published warehouse, or keeping a dbt snapshot
+— has to carry this one with it.
 
 - No row counts: dbt-duckdb sets `adapter_response.rows_affected` only for
   seeds. `pipeline_tables` measures rows from the warehouse instead.
@@ -47,7 +47,7 @@ snapshots in `history`.
   unique target directory by default, so every orchestrated build wrote
   `pipeline_runs` with zero rows while `just run` filled it; `dbt.cli(…)` now
   gets `paths.dbt_target_path()`. The only loud symptom was Evidence refusing a
-  zero-row Parquet in `pages.yml`. The guard is the blocking
+  zero-row Parquet when the site was built. The guard is the blocking
   `run_history_records_this_build` check, which asserts the invocation
   `run_results.json` names is in the table — `count(*) > 0` passes on a
   developer's warehouse that still holds older runs.

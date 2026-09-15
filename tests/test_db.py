@@ -1,4 +1,4 @@
-"""The read helpers in `gold_warehouse.db`.
+"""The read helpers in `modern_data_stack.db`.
 
 Small surface, but two of its four behaviours are distinctions that are easy to
 collapse by accident — "no row" against "a row holding NULL", and a raise that
@@ -13,7 +13,7 @@ import datetime as dt
 import duckdb
 import pytest
 
-from gold_warehouse.db import row, scalar
+from modern_data_stack.db import row, scalar
 
 
 @pytest.fixture

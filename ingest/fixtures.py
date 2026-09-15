@@ -10,7 +10,7 @@ The fixtures are trimmed to a representative set of countries by
 own format (gzipped CSV for OWID, the API's response body for the JSON sources,
 a zip for retail), so the parsing paths production uses run in CI too.
 
-The mechanism is `gold_warehouse.fixtures`; this module is the URL-to-file
+The mechanism is `modern_data_stack.fixtures`; this module is the URL-to-file
 map for this project's sources.
 """
 
@@ -19,9 +19,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from gold_warehouse import fixtures as _fixtures
-from gold_warehouse.fixtures import DEFAULT_ENV_VAR as ENV_VAR
-from gold_warehouse.paths import project_root
+from modern_data_stack import fixtures as _fixtures
+from modern_data_stack.fixtures import DEFAULT_ENV_VAR as ENV_VAR
+from modern_data_stack.paths import project_root
 
 FIXTURE_DIR = project_root() / "tests" / "fixtures" / "ingest"
 

@@ -1,6 +1,6 @@
 """Render this warehouse's bus matrix into `docs/WAREHOUSE.md`.
 
-The derivation is `gold_warehouse.bus_matrix`, which knows nothing about this
+The derivation is `modern_data_stack.bus_matrix`, which knows nothing about this
 project. Here live the constants: which schema holds the published layer, and
 which holes in the matrix are already known.
 
@@ -16,8 +16,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from gold_warehouse import bus_matrix
-from gold_warehouse.paths import dbt_manifest_path, project_root
+from modern_data_stack import bus_matrix
+from modern_data_stack.paths import dbt_manifest_path, project_root
 
 SCHEMA = "marts"
 

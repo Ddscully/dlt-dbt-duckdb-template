@@ -1,183 +1,127 @@
 ---
 name: adding-a-data-source
-description: End-to-end workflow for adding a new public data source to this warehouse — dlt resource, dbt source + staging model, mart column, Dagster asset key, and the report. Use whenever adding, renaming, or removing a source, a dlt resource, a WDI indicator, or a raw table.
+description: End-to-end workflow for adding a data source to this warehouse — dlt resource, dbt source and staging model, mart, Dagster asset key, fixture and dashboard page. Use whenever adding, renaming or removing a source, a dlt resource or a raw table, and when replacing the gold-prices example the template ships with.
 ---
 
 # Adding a data source
 
-Adding a source touches five layers that are wired together by **name**, not by
-imports. Miss one and the pipeline still runs — it just quietly splits into two
-disconnected halves. Work the checklist top to bottom.
+Every layer has to learn the new name, and most of the failures are silent: the
+graph splits in two, the fixture is never committed, the page renders empty.
+Work through the list in order — each step is small, and the last three are the
+ones people forget.
 
-The `dbt` vendor plugin covers the *how* of dbt, and is the only vendor skill
-still enabled — `dagster-expert`, `polars` and `duckdb-skills` were all retired
-on measured zero use, so the tool-level knowledge for those layers is the
-project skills and `AGENTS.md`. This skill covers the *seams between the
-layers*, which are specific to this repo. Naming rules live in [`docs/STYLE_GUIDE.md`](../../../docs/STYLE_GUIDE.md).
+The gold-prices source that ships with the template is the worked example. Read
+it first (`ingest/sources/gold.py` → `stg_gold_prices` → `fct_gold_price_month`
+→ `reports/pages/gold.md`), then either follow it or delete it once yours runs.
 
-## 0. First decide whether you need a new source at all
+## 1. The dlt resource — `ingest/sources/<publisher>.py`
 
-If the data is another World Bank indicator, you do **not** need a new resource —
-see "Adding a WDI indicator" at the bottom. That's a two-line change.
+One module per publisher, not per resource. Put the URL in a module constant:
+the fixture router and the tests both read it by name.
 
-## 1. dlt resource — `ingest/sources/<source>.py`
-
-**One module per upstream source**, holding its own constants, URL builders,
-watermark helpers and `@dlt.resource`. A genuinely new publisher gets a new
-module; a second resource from a publisher already here joins that module (the
-World Bank has two, the country dimension and the WDI panel).
-
-**The four coordination tuples stay in `ingest/pipeline.py` and are deliberately
-not per-source metadata.** `PARTITIONED_RESOURCES` carries a comment arguing the
-rule across all four candidates at once — why `ecb_fx_rates` merges and is still
-not partitioned, why retail's *load* narrows when its fetch cannot. Scattering
-those onto six modules would file each half of a comparison somewhere it cannot
-be read against the other half.
-
-- The `name=` you pick becomes the raw table name **and** the second element of
-  the Dagster asset key (`raw/<resource>`). Choose it once and don't rename it
-  casually — step 4 explains what breaks.
-- **CSV sources:** `pl.read_csv(..., infer_schema_length=None)`. The default
-  100-row inference sees OWID's empty early rows and lands numerics as VARCHAR.
-- **Leave `REFRESH = "drop_resources"` alone.** dlt persists its schema and only
-  *widens* types, so a column that lands wrong is not fixed by re-running. It's
-  `drop_resources` and not `drop_sources` because Dagster can materialize a
-  subset — `drop_sources` would wipe the tables that weren't selected.
-- **`replace` is the default answer.** These sources are small and a full reload
-  keeps the schema honest. Reach for `merge` only when the pull is genuinely
-  expensive, and then copy `wb_wdi` wholesale: a primary key that really is the
-  grain, declared `columns={...}` types (the schema is no longer re-inferred, so
-  inference can't save you), a *lookback window* rather than a high-water mark if
-  the publisher restates, and the name in `INCREMENTAL_RESOURCES` so it loads in
-  the un-refreshed call.
-- **Four resources `replace` and four `merge`, so a load is two `run()`s.**
-  `refresh` is an argument to `run()`, not a property of a resource, and it would
-  drop a merge table and its watermark. `load_groups()` returns the replace group
-  with `REFRESH` and the merge group without, restricted to the resources
-  selected.
-- **dlt state is keyed on the pipeline *name*, not the destination**, so a
-  fixture run would hand its watermarks to the next real run. `build_pipeline()`
-  appends `_fixtures` to the name under `INGEST_FIXTURES=1`. (dlt resets state
-  when the destination is empty, so this bites only once a real landing zone
-  exists.)
-- **A resource that yields Arrow gets no `_dlt_load_id` unless you ask** —
-  `build_pipeline()` sets `NORMALIZE__PARQUET_NORMALIZER__ADD_DLT_LOAD_ID=true`,
-  or the retail table lands with no load provenance and freshness and
-  `pipeline_sources` silently skip it. Adding the column to an existing table
-  needs a `drop table` plus `refresh="drop_resources"`.
-- **`.arrow()` is a streaming reader with a 1,000,000-row default batch**; handed
-  to dlt as a table it stored exactly 1,000,000 of 1,067,371 rows, with no error.
-  `to_arrow_reader(RETAIL_BATCH_ROWS)` and `yield from` is the fix, and
-  `test_retail_yields_every_row_the_workbook_holds` counts.
-- **Declare `timezone: False` on a timestamp column**, or dlt makes it
-  `TIMESTAMP WITH TIME ZONE` and a 07:45 till time reads `08:45:00+01:00` on a CET
-  machine.
-
-Run `just ingest` and look at the real column names before writing any SQL:
-
-```bash
-uv run python -c "
-from lake.lakehouse import read_only_connection
-print(read_only_connection().sql(\"select column_name, data_type from information_schema.columns \
-  where table_schema='raw' and table_name='<resource>'\"))"
+```python
+@dlt.resource(name="gold_prices_monthly", write_disposition="replace")
+def gold_prices_monthly():
+    yield pl.read_csv(_csv_source(GOLD_PRICES_MONTHLY), infer_schema_length=None).to_dicts()
 ```
 
-**Ask the catalog, not `data/warehouse.duckdb`.** dlt lands `raw` in the DuckLake
-catalog, so the same query against the warehouse file returns zero rows with no
-error — an empty answer that reads as "no such columns". `just sql` attaches the
-catalog, so `lakehouse.raw.<resource>` works there too.
+- **`infer_schema_length=None` scans the whole file.** Polars types a column
+  from the first rows otherwise, so a column that is empty at the top of the
+  file arrives as null.
+- **Reach shared helpers through the module** — `http.get_json(...)`, never
+  `from ingest.http import get_json`. The tests patch them through the module,
+  and a by-name import binds the unpatched original.
+- Then register it in `ingest/pipeline.py`: add it to the `@dlt.source`, and to
+  **exactly one** of `FULL_REFRESH_RESOURCES` or `INCREMENTAL_RESOURCES`.
 
-dlt snake_cases and flattens nested JSON: `iso2Code` → `iso2_code`,
-`incomeLevel.value` → `income_level__value`. Never guess these.
+**A load is two `run()` calls, and that is deliberate.** `refresh=
+"drop_resources"` re-infers the schema (dlt otherwise only ever *widens* types,
+so a narrowed upstream column is masked), but applied to a merge resource it
+would drop the table *and its watermark*. So the replace group runs with
+`refresh` and the merge group without.
 
-## 2. dbt source — `dbt/models/staging/_sources.yml`
+## 2. The landing table — `dbt/models/staging/_sources.yml`
 
-Add the table under the `raw` source. **The `name:` here must equal the dlt
-resource name from step 1.**
+Add a `- name:` under the `raw` source, with a description. The name must be the
+dlt resource's name, exactly.
 
-## 3. Staging model — `dbt/models/staging/stg_<thing>.sql`
+**This is where the asset graph joins.** `orchestration/assets.py` keys dlt
+resources as `raw/<resource>` so they meet the keys dagster-dbt derives from
+this file. Spell one of them differently and the graph silently splits into two
+halves that both still run. `just materialize-preview '*'` shows the keys.
 
-Cleans to the project grain, `(country_iso3, year)`:
+## 3. The staging model — `dbt/models/staging/stg_<entity>.sql`
 
-- Rename the source's key columns to `country_iso3` and `year`. Every model in
-  the warehouse joins on those two and nothing else.
-- Drop non-country aggregates. The `stg_co2` pattern is
-  `where iso_code is not null and length(iso_code) = 3`.
-- If the source is keyed by ISO2, join `stg_country` to get ISO3. Watch for
-  non-standard codes — Eurostat sends `EL` for Greece and `UK` for the UK, and
-  `stg_eu_electricity_prices.sql` remaps both.
-- Import CTEs at the top, one `{{ source() }}` or `{{ ref() }}` each.
-- Add the model to the staging YAML with a description that states the grain and
-  any partial coverage.
+Rename, cast, filter. No joins to other sources. Declare the grain's uniqueness
+test in `_staging.yml` — that test is what the bus matrix later reads as the
+grain.
 
-Run `just lint` — the style rules are enforced, not advisory.
+## 4. The mart — `dbt/models/marts/<group>/`
 
-## 4. Dagster asset key — usually nothing to do, but verify
+A `fct_` or `dim_` model with `contract: {enforced: true}`, every column typed,
+every numeric column carrying `meta: {additivity: …}`. If the group is new, add
+it to `dbt/models/_groups.yml` and set `+group:` on the folder in
+`dbt_project.yml`.
 
-`RawSchemaDltTranslator` in `orchestration/assets.py` keys every dlt resource as
-`raw/<resource>`, which is exactly the key `dagster-dbt` derives from
-`_sources.yml`. That matching string is the *only* thing joining the EL half of
-the graph to the T half.
+**Join the fact onto a dimension that decides its population** (the template
+uses a `dim_month` date spine). A period the publisher has not filled then
+arrives as a row with nulls rather than as a missing row, and "is this gap real"
+becomes answerable.
 
-So: **if step 1's resource name and step 2's source name agree, the graph wires
-itself.** If they don't, both halves still materialize — unconnected — and no
-error is raised. Always verify:
+## 5. The fixture — CI runs offline
+
+CI sets `INGEST_FIXTURES=1`, so the source cannot pass `just test-pipeline`
+until its fixture exists. Two edits and one command:
+
+1. a route in `ingest/fixtures.py`'s `_ROUTES` — `(pattern, filename)`, and the
+   filename is named after the resource;
+2. a call in `scripts/record_fixtures.py`;
+3. `just record-fixtures`, which hits the network once.
+
+Then **check git actually took the file**: `git status --short
+tests/fixtures/ingest/`. `.gitignore` carries `*.csv` with an exception for that
+directory; a fixture written anywhere else, or in another ignored format, is
+skipped by `git add -A` without a word, passes in your working tree, and fails
+in CI with `No such file or directory`.
+
+`tests/test_fixtures.py` then holds the whole set together: every URL resolves,
+no two routes claim one URL, every route is reachable, no fixture is orphaned.
+
+## 6. The orchestration layer — `orchestration/`
+
+- `RAW_DESCRIPTIONS` in `assets.py` needs an entry per resource;
+  `tests/test_definitions.py` fails without one.
+- A new Polars transform is a new `@dg.asset`, and it must also be listed by
+  hand in `definitions.py`. **An asset missing from that list is not in the
+  graph at all**, and `dagster definitions validate` still passes.
+- `transform/pipeline_status.py`'s `SOURCE_TABLES` lists the landing tables the
+  observability page inventories.
+
+## 7. The dashboard — `reports/`
+
+A query in `reports/sources/warehouse/<name>.sql` and a page in
+`reports/pages/`. **Name the columns; never `select *`** — an Evidence source
+ships every column it selects to every visitor of the built site.
+
+Then `publish/build_report.py`'s `TABLE_TO_DBT_MODEL` (for dbt models) or
+`TABLE_TO_ASSET_KEY` (for Polars output), and an exposure in
+`dbt/models/_exposures.yml`. `tests/test_report.py` and `tests/test_exposures.py`
+hold both to the SQL the pages actually run.
+
+## 8. Run it
 
 ```bash
-uv run --group orchestration dagster definitions validate
+just test            # the guards above
+just test-pipeline   # the real thing, offline, into a throwaway warehouse
+just materialize     # the same, through the asset graph
 ```
 
-then open `just dagster` and confirm the new asset has an edge into `staging`.
+`just dbt-freshness` and the nightly workflow take it from there.
 
-**The mart is versioned**, so the file is `_v2.sql` while the relation stays
-`marts.fct_emissions_energy` (v2 is aliased back to the bare name). You do not
-need to touch v1: it is a `select * exclude (…)` view over v2 and its contract is
-declared `include: all`, so a new column reaches both on its own — which also
-means it ships to v1's consumers without a second decision.
+## Removing a source
 
-Add an import CTE, a `left join` on `(country_iso3, year)`, and the column in the
-right source group with a `--` comment. The left joins hang off
-`dim_country_year`, the spine — so coverage wider than the other sources' survives
-— but **add your staging model to the `observed` CTE as well**, or the mart keeps
-only the country-years the existing four report and your extra rows are filtered
-out before you see them.
-
-Update the mart yml for your model's dbt group — `dbt/models/marts/` holds one
-per group (`_country_stats.yml`, `_reference.yml`, `_compliance.yml`,
-`_retail.yml`) — then `just dbt-build`. Note the partial
-coverage in the column's YAML description either way — that's the convention.
-
-## 6. Downstream
-
-- **Evidence** (`reports/`) — new mart columns need
-  `just report-clean`, not `just report`: after a column change `just report`
-  can validate against a stale schema under `reports/.evidence/` (see
-  `building-evidence-reports`).
-- **Docs** — the source table belongs in the `raw` list in `AGENTS.md` and the
-  "Data sources" section of `README.md`.
-
-## Verify before you call it done
-
-```bash
-just run   # ingest -> dbt build -> transform, against the real APIs
-uv run python -c "import duckdb; \
-  print(duckdb.connect('data/warehouse.duckdb', read_only=True).sql(\
-  'select * from marts.fct_emissions_energy limit 5'))"
-```
-
-Check the row count didn't drop and the new column isn't all-null. Don't assume.
-
----
-
-## Adding a WDI indicator
-
-Two places, both required:
-
-Then the mart column (step 5) and the report (step 6). The
-`wdi_indicators_all_present` asset check will fail if the API returns 200 with an
-empty series for the new code, which is the common failure mode.
-
-`wb_wdi` is loaded incrementally, but the watermarks are kept **per indicator**,
-so a code that isn't in the state yet is fetched in full — you get the whole
-series, not the last five years. Nothing to do about it beyond re-recording the
-fixtures (`just record-fixtures`), which the offline tests need anyway.
+The same list in reverse, and the guards will find what you miss: the fixture
+(orphan test), `RAW_DESCRIPTIONS` (definitions test), the exposure (exposures
+test), the report maps (report test). The one nothing checks is the landing
+table itself — dropping the resource leaves the rows in the DuckLake catalog,
+where earlier snapshots keep them readable.

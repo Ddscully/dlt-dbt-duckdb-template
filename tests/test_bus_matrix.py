@@ -24,8 +24,8 @@ from pathlib import Path
 
 import pytest
 
-from gold_warehouse import bus_matrix
-from gold_warehouse.paths import dbt_manifest_path
+from modern_data_stack import bus_matrix
+from modern_data_stack.paths import dbt_manifest_path
 from publish.bus_matrix import KNOWN_UNCONFORMED, SCHEMA
 
 # ci.yml runs pytest before `dbt parse`, so the manifest is missing there; it
@@ -85,7 +85,7 @@ def test_the_block_in_the_doc_is_what_the_manifest_produces_today():
     leaves a table that is confidently wrong and reads as authoritative — the
     exact failure the counts guard exists for, one artifact along.
     """
-    from gold_warehouse.paths import project_root
+    from modern_data_stack.paths import project_root
     from publish.bus_matrix import DOC_PATH, MARKER_BEGIN, MARKER_END, render
 
     text = (project_root() / DOC_PATH).read_text()

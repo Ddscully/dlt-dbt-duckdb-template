@@ -28,7 +28,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from gold_warehouse.ducklake import attach
+from modern_data_stack.ducklake import attach
 from lake.lakehouse import ATTACH_ALIAS, catalog_path, data_path
 from orchestration.resources import dbt_project
 
@@ -105,7 +105,7 @@ def _values_clause(rows: list[tuple]) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# raw/wb_wdi — wdi_indicators_all_present
+# analytics/pipeline_status — run_history_records_this_build
 # --------------------------------------------------------------------------- #
 
 
@@ -186,14 +186,8 @@ def test_run_history_check_fails_when_dbt_left_no_artifact_at_all(tmp_path, monk
 
 
 # --------------------------------------------------------------------------- #
-# raw/om_weather_daily — weather_revisions_are_derivable
+# reports/evidence_site — site_pages_all_rendered
 # --------------------------------------------------------------------------- #
-#
-# What is fragile is the substitute for DuckLake's change feed — see the check's
-# own docstring.
-
-
-DAY1 = [("DEU", "2021-12-20", 3.5), ("FRA", "2021-12-20", 7.1)]
 
 
 def _routes(tmp_path: Path, sizes: dict[str, int | None]) -> dict[str, Path]:
@@ -209,7 +203,7 @@ def _routes(tmp_path: Path, sizes: dict[str, int | None]) -> dict[str, Path]:
 
 
 def test_site_check_passes_when_every_page_rendered(tmp_path, monkeypatch, assets):
-    routes = _routes(tmp_path, {"index": 19_000, "retail": 92_000})
+    routes = _routes(tmp_path, {"index": 19_000, "gold": 92_000})
     monkeypatch.setattr(assets, "page_routes", lambda: routes)
 
     result = assets.site_pages_all_rendered()
@@ -220,22 +214,22 @@ def test_site_check_passes_when_every_page_rendered(tmp_path, monkeypatch, asset
 
 def test_site_check_fails_a_page_that_never_rendered(tmp_path, monkeypatch, assets):
     """`evidence build` exits 0 for a site missing a page."""
-    routes = _routes(tmp_path, {"index": 19_000, "retail": None})
+    routes = _routes(tmp_path, {"index": 19_000, "gold": None})
     monkeypatch.setattr(assets, "page_routes", lambda: routes)
 
     result = assets.site_pages_all_rendered()
 
     assert not result.passed
-    assert _meta(result, "missing") == ["retail"]
+    assert _meta(result, "missing") == ["gold"]
 
 
 def test_site_check_fails_a_route_that_emitted_only_the_shell(tmp_path, monkeypatch, assets):
     """Present and non-empty, and still not a page. This is the failure that
     looks most like success, which is why the check measures size at all."""
-    routes = _routes(tmp_path, {"index": 19_000, "retail": 900})
+    routes = _routes(tmp_path, {"index": 19_000, "gold": 900})
     monkeypatch.setattr(assets, "page_routes", lambda: routes)
 
     result = assets.site_pages_all_rendered()
 
     assert not result.passed
-    assert _meta(result, "suspiciously_small") == {"retail": 900}
+    assert _meta(result, "suspiciously_small") == {"gold": 900}

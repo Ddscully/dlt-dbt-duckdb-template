@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import pytest
 
-from gold_warehouse import paths
+from modern_data_stack import paths
 
 
 def test_the_in_tree_root_is_this_repo():
-    """The branch that actually runs here: `src/gold_warehouse/paths.py`'s
+    """The branch that actually runs here: `src/modern_data_stack/paths.py`'s
     grandparent, which holds `pyproject.toml`, `dbt/` and `data/`."""
     root = paths.project_root()
     assert (root / "pyproject.toml").is_file()

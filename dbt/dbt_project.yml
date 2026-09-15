@@ -1,8 +1,8 @@
-name: "gold_warehouse"
+name: "my_warehouse"
 version: "0.1.0"
 config-version: 2
 
-profile: "gold_warehouse"
+profile: "my_warehouse"
 
 # Keep the deprecation date the release notes promise. When
 # `fct_emissions_energy_v1`'s `deprecation_date` (2026-11-01) passes, dbt by
@@ -28,7 +28,7 @@ clean-targets: ["target", "dbt_packages"]
 
 
 models:
-  gold_warehouse:
+  my_warehouse:
     staging:
       +materialized: view
       +schema: staging
@@ -56,7 +56,7 @@ models:
 
 
 snapshots:
-  gold_warehouse:
+  my_warehouse:
     # The one schema no rebuild can reproduce.
     +schema: history
 

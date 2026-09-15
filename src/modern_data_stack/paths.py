@@ -49,7 +49,7 @@ def project_root() -> Path:
             raise NotADirectoryError(f"{ROOT_ENV_VAR}={env!r} is not a directory")
         return root
 
-    # src/gold_warehouse/paths.py -> src/gold_warehouse -> src -> the root.
+    # src/modern_data_stack/paths.py -> src/modern_data_stack -> src -> the root.
     in_tree = Path(__file__).resolve().parents[2]
     if _looks_like_root(in_tree):
         return in_tree

@@ -1,9 +1,9 @@
 [project]
-name = "gold-warehouse"
+name = "my-warehouse"
 version = "0.1.0"
-description = "A public-data warehouse built end to end: dlt → DuckDB → dbt → Polars → Evidence, orchestrated by Dagster, rebuilt from live sources on every push."
+description = "A public-data warehouse built end to end: dlt → DuckLake → dbt → Polars → Evidence, orchestrated by Dagster."
 readme = "README.md"
-authors = [{ name = "Daniel Scully", email = "danieldscully@gmail.com" }]
+authors = [{ name = "Your Name", email = "you@example.com" }]
 requires-python = ">=3.13"
 
 # Runtime dependencies (the pipeline itself)
@@ -11,9 +11,9 @@ dependencies = [
     "dlt[duckdb]>=1.5",   # EL: API/file ingestion into DuckDB with schema inference
     "duckdb>=1.1",        # in-process analytical warehouse
     "polars>=1.17",       # heavy/columnar transforms in Python
-    # Runtime: DuckDB needs it for `to_arrow_reader()` and `.pl()`, so the retail
-    # ingest and both Polars transforms fail without it. See the
-    # `dependency-versions` skill.
+    # Runtime: DuckDB needs it for `to_arrow_reader()` and `.pl()`, so anything
+    # that moves rows between DuckDB and Polars fails without it — which is
+    # every transform here.
     "pyarrow>=17",        # DuckDB's Arrow bridge — needed by the ingest and both transforms
     "dbt-duckdb>=1.9",    # T: dbt adapter targeting the DuckDB file
 ]
@@ -50,11 +50,18 @@ orchestration = [
 ]
 
 [project.scripts]
-mds = "gold_warehouse:main"
+mds = "modern_data_stack:main"
 
 [build-system]
 requires = ["uv_build>=0.12.0,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+# The package keeps the stack's name whatever the project is called. uv_build
+# otherwise derives the module from `[project] name` and refuses to build until
+# `src/` holds a directory spelled like it, so renaming the project would mean
+# renaming every import too.
+module-name = "modern_data_stack"
 
 [tool.uv]
 # `default-groups` deliberately unset, so uv's default (`dev`) applies and a bare
@@ -93,7 +100,7 @@ combine-as-imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # `ingest`, `lake`, `orchestration`, `publish`, `transform` and `scripts` are
-# top-level directories, not installed packages (only src/gold_warehouse is);
+# top-level directories, not installed packages (only src/modern_data_stack is);
 # everything else reaches them via `python -m` from the repo root.
 pythonpath = ["."]
 # The unit tests mock every HTTP call; `just test-pipeline` is the integration
@@ -102,9 +109,9 @@ addopts = "-q"
 
 [tool.coverage.run]
 # Here rather than on the recipe, so an ad-hoc run measures the same thing.
-# `gold_warehouse` is the installed package; the rest are top-level
+# `modern_data_stack` is the installed package; the rest are top-level
 # directories — the split `pythonpath` above exists for.
-source = ["ingest", "transform", "lake", "orchestration", "publish", "scripts", "gold_warehouse"]
+source = ["ingest", "transform", "lake", "orchestration", "publish", "scripts", "modern_data_stack"]
 # This repo argues about deliberately-unreachable branches in prose; branch
 # coverage makes them a number.
 branch = true
@@ -130,4 +137,4 @@ python = "./.venv"
 [tool.dagster]
 # Lets `uv run dagster dev` find the code location with no extra flags.
 module_name = "orchestration.definitions"
-code_location_name = "gold_warehouse"
+code_location_name = "my_warehouse"

@@ -73,7 +73,7 @@ decision.
 - **The tree is clean, and zero is the point**: a checker that always prints the
   same lines is a checker nobody reads. Getting there showed what noise costs —
   23 of the first 38 diagnostics were `.fetchone()[0]` against aggregates that
-  return one row by construction. `gold_warehouse.db` states that invariant
+  return one row by construction. `modern_data_stack.db` states that invariant
   once (`db.scalar` raises naming the query), and `ingest/http.py`'s
   `get_json_object` narrows `dict | list` once for the sources that only ever
   receive objects.

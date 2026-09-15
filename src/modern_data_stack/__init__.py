@@ -1,4 +1,4 @@
-"""gold-warehouse: the domain-neutral half of this repo's pipeline.
+"""my-warehouse: the domain-neutral half of this repo's pipeline.
 
 The project layers (`ingest/`, `dbt/`, `transform/`, `lake/`, `reports/`,
 `orchestration/`) are the worked example — emissions, energy and development
@@ -37,7 +37,7 @@ points are the `just` recipes and the module runners under ingest/ and transform
 
 def main() -> None:
     print(
-        "gold-warehouse\n"
+        "my-warehouse\n"
         "  just run        # ingest -> dbt build -> polars transform\n"
         "  just sql        # explore the DuckDB warehouse (DuckDB CLI)\n"
         "See README.md for the full pipeline."

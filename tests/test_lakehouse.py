@@ -5,11 +5,11 @@ DuckLake's change feed.
 
 **Why there is a substitute at all** is the finding these tests exist to hold.
 `ducklake_table_changes()` is the obvious answer and it does not work behind
-dlt: reloading 500 identical rows through `write_disposition="merge"` reports
-`update_preimage: 500, update_postimage: 500`, because dlt regenerates `_dlt_id`
-*and* `_dlt_load_id` on every row it touches. The feed is faithful and the
-writer is what makes it useless. `revisions()` diffs two snapshots with `EXCEPT`
-instead, projecting those columns away.
+dlt: reloading identical rows through `write_disposition="merge"` reports every
+one of them as an update, because dlt regenerates `_dlt_id` *and* `_dlt_load_id`
+on every row it touches. The feed is faithful and the writer is what makes it
+useless. `revisions()` diffs two snapshots with `EXCEPT` instead, projecting
+those columns away.
 
 The failure that matters is not an exception. Drop a column from the ignore list
 and the diff returns *every* row as revised — a plausible number, in the right
@@ -22,18 +22,18 @@ from __future__ import annotations
 import duckdb
 import pytest
 
-from gold_warehouse.ducklake import attach, revisions, table_versions
+from modern_data_stack.ducklake import attach, revisions, table_versions
 from lake import lakehouse
 
-WEATHER = "raw.om_weather_daily"
+TABLE = "raw.gold_prices_monthly"
 
-# One day, two capitals. Small enough to read, and two rows is the minimum that
-# can distinguish "one row changed" from "everything changed".
-DAY = [("DEU", "2021-12-20", 3.5), ("FRA", "2021-12-20", 7.1)]
+# Two months. Small enough to read, and two rows is the minimum that can
+# distinguish "one row changed" from "everything changed".
+LOAD = [("2021-11", "2021-11-01", 1_820.0), ("2021-12", "2021-12-01", 1_795.0)]
 
 
 def _write(lake_dir, loads: list[list[tuple]]) -> None:
-    """Write `raw.om_weather_daily` once per entry in `loads`.
+    """Write the landing table once per entry in `loads`.
 
     Every write stamps fresh `_dlt_load_id`/`_dlt_id` values, which is what dlt
     does on every merge and the whole reason the diff has to ignore them. Plain
@@ -47,13 +47,13 @@ def _write(lake_dir, loads: list[list[tuple]]) -> None:
     try:
         for n, rows in enumerate(loads):
             values = ", ".join(
-                f"('{iso}', date '{day}', {temp}, 'load_{n}', 'id_{n}_{i}')"
-                for i, (iso, day, temp) in enumerate(rows)
+                f"('{label}', date '{day}', {price}, 'load_{n}', 'id_{n}_{i}')"
+                for i, (label, day, price) in enumerate(rows)
             )
-            con.execute(f"drop table if exists lakehouse.{WEATHER}")
+            con.execute(f"drop table if exists lakehouse.{TABLE}")
             con.execute(
-                f"create table lakehouse.{WEATHER} as select * from (values {values}) as t"
-                "(country_iso3, weather_date, temperature_2m_mean, _dlt_load_id, _dlt_id)"
+                f"create table lakehouse.{TABLE} as select * from (values {values}) as t"
+                "(date, month_start, price, _dlt_load_id, _dlt_id)"
             )
     finally:
         con.close()
@@ -68,17 +68,17 @@ def _connect(lake_dir):
 def test_an_identical_reload_yields_no_revisions(tmp_path):
     """The routine case, and the one the change feed gets wrong.
 
-    Every ingest re-merges 41 x 90 = 3,690 weather rows whether ERA5 moved or
-    not. If that reads as 3,690 revisions the log is noise, which is precisely
-    what `ducklake_table_changes()` reports here.
+    Every ingest re-merges the whole lookback window whether the publisher
+    restated anything or not. If that reads as a revision per row the log is
+    noise, which is precisely what `ducklake_table_changes()` reports here.
     """
-    _write(tmp_path, [DAY, DAY])
+    _write(tmp_path, [LOAD, LOAD])
     con = _connect(tmp_path)
     try:
-        versions = table_versions(con, "lakehouse", WEATHER)
+        versions = table_versions(con, "lakehouse", TABLE)
         assert len(versions) >= 2
         changed = revisions(
-            con, "lakehouse", WEATHER, versions[-2], versions[-1], ignore=lakehouse.DLT_COLUMNS
+            con, "lakehouse", TABLE, versions[-2], versions[-1], ignore=lakehouse.DLT_COLUMNS
         )
     finally:
         con.close()
@@ -86,18 +86,18 @@ def test_an_identical_reload_yields_no_revisions(tmp_path):
 
 
 def test_one_restated_value_yields_exactly_that_row(tmp_path):
-    _write(tmp_path, [DAY, [("DEU", "2021-12-20", -0.5), ("FRA", "2021-12-20", 7.1)]])
+    _write(tmp_path, [LOAD, [("2021-11", "2021-11-01", 1_806.5), *LOAD[1:]]])
     con = _connect(tmp_path)
     try:
-        versions = table_versions(con, "lakehouse", WEATHER)
+        versions = table_versions(con, "lakehouse", TABLE)
         changed = revisions(
-            con, "lakehouse", WEATHER, versions[-2], versions[-1], ignore=lakehouse.DLT_COLUMNS
+            con, "lakehouse", TABLE, versions[-2], versions[-1], ignore=lakehouse.DLT_COLUMNS
         )
     finally:
         con.close()
     assert len(changed) == 1
-    assert changed[0][0] == "DEU"
-    assert changed[0][2] == -0.5
+    assert changed[0][0] == "2021-11"
+    assert changed[0][2] == 1_806.5
 
 
 def test_forgetting_the_provenance_columns_reports_the_whole_table(tmp_path):
@@ -108,17 +108,17 @@ def test_forgetting_the_provenance_columns_reports_the_whole_table(tmp_path):
     raises nothing and returns nothing malformed — a wrong answer of the right
     shape.
     """
-    _write(tmp_path, [DAY, DAY])
+    _write(tmp_path, [LOAD, LOAD])
     con = _connect(tmp_path)
     try:
-        versions = table_versions(con, "lakehouse", WEATHER)
-        unfiltered = revisions(con, "lakehouse", WEATHER, versions[-2], versions[-1], ignore=())
+        versions = table_versions(con, "lakehouse", TABLE)
+        unfiltered = revisions(con, "lakehouse", TABLE, versions[-2], versions[-1], ignore=())
         filtered = revisions(
-            con, "lakehouse", WEATHER, versions[-2], versions[-1], ignore=lakehouse.DLT_COLUMNS
+            con, "lakehouse", TABLE, versions[-2], versions[-1], ignore=lakehouse.DLT_COLUMNS
         )
     finally:
         con.close()
-    assert len(unfiltered) == len(DAY)
+    assert len(unfiltered) == len(LOAD)
     assert filtered == []
 
 
@@ -126,24 +126,19 @@ def test_ignoring_every_column_is_refused_rather_than_answered(tmp_path):
     """`ignore` covering the whole table would compare nothing and return nothing
     — indistinguishable from "no revisions" and wrong in the safe-looking
     direction. It raises instead."""
-    _write(tmp_path, [DAY])
+    _write(tmp_path, [LOAD])
     con = _connect(tmp_path)
     try:
-        versions = table_versions(con, "lakehouse", WEATHER)
-        all_columns = (
-            "country_iso3",
-            "weather_date",
-            "temperature_2m_mean",
-            *lakehouse.DLT_COLUMNS,
-        )
+        versions = table_versions(con, "lakehouse", TABLE)
+        all_columns = ("date", "month_start", "price", *lakehouse.DLT_COLUMNS)
         with pytest.raises(ValueError, match="no columns left"):
-            revisions(con, "lakehouse", WEATHER, versions[0], None, ignore=all_columns)
+            revisions(con, "lakehouse", TABLE, versions[0], None, ignore=all_columns)
     finally:
         con.close()
 
 
 def test_a_table_the_catalog_does_not_hold_is_named_in_the_error(tmp_path):
-    _write(tmp_path, [DAY])
+    _write(tmp_path, [LOAD])
     con = _connect(tmp_path)
     try:
         with pytest.raises(ValueError, match="raw.not_a_table"):
@@ -153,24 +148,13 @@ def test_a_table_the_catalog_does_not_hold_is_named_in_the_error(tmp_path):
 
 
 def test_an_unqualified_table_name_is_refused(tmp_path):
-    _write(tmp_path, [DAY])
+    _write(tmp_path, [LOAD])
     con = _connect(tmp_path)
     try:
         with pytest.raises(ValueError, match="schema-qualified"):
-            revisions(con, "lakehouse", "om_weather_daily", 0, None, ignore=())
+            revisions(con, "lakehouse", "gold_prices_monthly", 0, None, ignore=())
     finally:
         con.close()
-
-
-def test_the_provenance_list_is_the_one_dlt_actually_writes():
-    """`DLT_COLUMNS` here must name every column dlt regenerates, and
-    `gold_warehouse.history` already states that set for the carry-forward
-    rules. Two hand-written copies of the same fact is how one of them goes
-    stale; this holds them together.
-    """
-    from gold_warehouse.history import DLT_COLUMNS as CARRIED_COLUMNS
-
-    assert lakehouse.DLT_COLUMNS == CARRIED_COLUMNS
 
 
 def test_the_attach_alias_is_the_database_dbt_declares():
@@ -186,5 +170,5 @@ def test_the_attach_alias_is_the_database_dbt_declares():
     assert raw["database"] == lakehouse.ATTACH_ALIAS
 
     profile = yaml.safe_load(Path("dbt/profiles.yml").read_text())
-    attached = profile["gold_warehouse"]["outputs"]["dev"]["attach"]
+    attached = profile["my_warehouse"]["outputs"]["dev"]["attach"]
     assert [a["alias"] for a in attached] == [lakehouse.ATTACH_ALIAS]

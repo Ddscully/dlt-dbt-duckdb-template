@@ -1,10 +1,9 @@
 """Which measures may be summed, declared on the column and held to the models.
 
-A Parquet file carries column names and types and nothing else. Nothing in it
-says that a price may not be summed. So the warehouse states it:
-`meta: {additivity: …}` on the column, in the same ymls that carry the contract,
-and `publish/export_warehouse.py` carries the labels into the release manifest
-so a consumer who cannot be paged has them too.
+A column name and a type say nothing about whether the column may be added up.
+So the warehouse states it: `meta: {additivity: …}` on the column, in the same
+ymls that carry the contract, where dbt's docs and any consumer of the manifest
+can read it.
 """
 
 from __future__ import annotations
@@ -15,8 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from gold_warehouse.paths import dbt_manifest_path
-from publish.export_warehouse import EXTRA_ADDITIVITY, additivity
+from modern_data_stack.paths import dbt_manifest_path
 
 # ci.yml runs pytest before `dbt parse`, so the manifest is missing there; it
 # re-runs this file after the parse, which `tests/test_workflows.py` enforces.
@@ -59,10 +57,8 @@ RATIO_SHAPED = re.compile(r"(_pct$|_per_|_share|share_|_rate$|rate_|intensity|me
 def mart_columns() -> dict[tuple[str, str], dict]:
     """Every column of every marts model, keyed by (relation, column).
 
-    Keyed on the *published* relation (`schema.alias`) rather than the model
-    name, because the versioned model is two relations and they are labelled
-    independently — v1 inherits its 36 through `include: all` and declares
-    `co2_per_gdp` itself.
+    Keyed on the relation (`schema.alias`) rather than the model name, because a
+    versioned model is two relations and they are labelled independently.
     """
     manifest = json.loads(Path(manifest_path).read_text())
     out = {}
@@ -82,19 +78,6 @@ def labelled() -> dict[tuple[str, str], str]:
         if label:
             out[key] = label
     return out
-
-
-def extras() -> dict[tuple[str, str], str]:
-    """`EXTRA_ADDITIVITY`, rekeyed to match `labelled()`."""
-    return {
-        (f"{schema}.{table}", column): label
-        for (schema, table, column), label in EXTRA_ADDITIVITY.items()
-    }
-
-
-def everything() -> dict[tuple[str, str], str]:
-    """Every label the release publishes — dbt's and the Polars layer's."""
-    return labelled() | extras()
 
 
 def numeric() -> dict[tuple[str, str], dict]:
@@ -157,11 +140,9 @@ def test_the_numeric_pattern_knows_a_measure_from_a_timestamp():
 def test_every_numeric_mart_column_carries_an_additivity_label():
     """The exhaustive half. A new measure with no label is the failure mode.
 
-    This one is scoped to `marts`, which is what dbt can describe. The
-    `analytics` tables are written by Polars and invisible to dbt, so they are
-    declared in `EXTRA_ADDITIVITY` and held by the two tests below — the same
-    split `EXTRA_CLASSIFICATIONS` makes for `pii`. `staging` is outside both on
-    purpose: it is a cleaning copy of a source whose measures are declared one
+    Scoped to `marts`, which is what dbt can describe. The `analytics` tables
+    are written by Polars and invisible to dbt; `staging` is outside it on
+    purpose, being a cleaning copy of a source whose measures are declared one
     layer up.
     """
     missing = sorted(key for key in numeric() if key not in labelled())
@@ -176,7 +157,7 @@ def test_the_label_vocabulary_is_closed():
     decoration."""
     # `<=`, not `==`: a fifth label is the typo this exists for, but a project
     # need not use all four.
-    assert set(everything().values()) <= LABELS
+    assert set(labelled().values()) <= LABELS
 
 
 def test_only_numeric_columns_are_labelled():
@@ -205,7 +186,7 @@ def test_a_ratio_shaped_name_is_never_summable():
     """
     summable = sorted(
         (relation, column, label)
-        for (relation, column), label in everything().items()
+        for (relation, column), label in labelled().items()
         if RATIO_SHAPED.search(column) and label in {"additive", "semi_additive"}
     )
     assert not summable, f"named like a ratio but declared summable: {summable}"
@@ -227,21 +208,3 @@ def test_a_semi_additive_column_says_which_direction_fails():
         if label == "semi_additive" and not (mart_columns()[key].get("description") or "").strip()
     )
     assert not silent, f"semi_additive with no description saying which direction fails: {silent}"
-
-
-def test_the_labels_reach_the_release_manifest():
-    """A label with no consequence is decoration — the same argument that makes
-    `direct_identifier` real is what puts these in `manifest.json`.
-
-    The release is the audience that cannot ask: a Parquet consumer has the
-    types and nothing else. Asserted against the ymls rather than against a
-    frozen number, so the two cannot drift apart.
-    """
-    shipped = additivity()
-    assert shipped is not None, "the dbt manifest exists, so the export must have read it"
-    flat = {
-        (relation, column): label
-        for relation, columns in shipped.items()
-        for column, label in columns.items()
-    }
-    assert flat == everything()

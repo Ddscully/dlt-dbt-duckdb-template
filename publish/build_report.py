@@ -23,9 +23,10 @@ regardless — see `run()`. The file count still varies by one or two between
 runs, because Evidence emits an `api/` route per query hash and the
 `pipeline_*` queries carry load timestamps.
 
-It does not touch `evidence.config.yaml`. GitHub Pages serves from a subpath,
-which Evidence reads from `deployment.basePath` and no env var; `pages.yml`
-appends it before calling this, and a committed value would break `npm run dev`.
+It does not touch `evidence.config.yaml`. A host that serves the site from a
+subpath (GitHub Pages does) needs `deployment.basePath`, which Evidence reads
+from the config and no env var; append it in the deploying workflow rather than
+committing a value, which would break `npm run dev`.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from gold_warehouse.paths import project_root
+from modern_data_stack.paths import project_root
 
 REPORTS_DIR = project_root() / "reports"
 
@@ -66,6 +67,7 @@ TABLE_TO_DBT_MODEL = {
 }
 
 TABLE_TO_ASSET_KEY = {
+    "analytics.gold_price_trend": ("analytics", "gold_price_trend"),
     "analytics.pipeline_sources": ("analytics", "pipeline_status"),
     "analytics.pipeline_tables": ("analytics", "pipeline_status"),
     "analytics.pipeline_tests": ("analytics", "pipeline_status"),

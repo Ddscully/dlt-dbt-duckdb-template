@@ -171,7 +171,7 @@ def test_the_dbt_build_writes_its_run_results_where_the_reader_looks():
     from pathlib import Path
     from typing import Any
 
-    from gold_warehouse.paths import dbt_run_results_path, dbt_target_path
+    from modern_data_stack.paths import dbt_run_results_path, dbt_target_path
     from orchestration import assets
 
     called_with: list[str] = []

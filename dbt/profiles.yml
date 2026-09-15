@@ -15,7 +15,7 @@
 # `marts.fct_emissions_energy` resolves the same locally, in CI and in the
 # release. More targets would differ in name only. Porting to a real warehouse?
 # Add them — see `docs/REUSING_THIS_STACK.md`.
-gold_warehouse:
+my_warehouse:
   target: dev
   outputs:
     dev:
