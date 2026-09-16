@@ -30,6 +30,14 @@ dlt (EL) → DuckLake (raw) → dbt (staging/marts) → Polars (heavy T) → Evi
 One source ships end to end (monthly gold prices) so every layer has a worked
 example. Replacing it is the `adding-a-data-source` skill.
 
+It is a simplified fork of
+[`Ddscully/dlt-dbt-duckdb-evidence`](https://github.com/Ddscully/dlt-dbt-duckdb-evidence),
+which runs this shape over live public data with a publishing layer and a
+course. **It is a fork, not a generated cut**: nothing derives this tree from
+that one, so a fix that belongs in both has to be made in both, and a pattern
+that looks truncated here is worth reading at full size there before extending
+it.
+
 The README is the tour; [`docs/WAREHOUSE.md`](docs/WAREHOUSE.md) is what each
 schema holds, and [`docs/STYLE_GUIDE.md`](docs/STYLE_GUIDE.md) is how the SQL is
 written. What it cost to learn sits here and in the skills, so a change to how a

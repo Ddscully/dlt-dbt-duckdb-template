@@ -15,6 +15,18 @@ credentials — so that `just test-pipeline` and the Dagster asset graph are gre
 from the first commit, and so there is a working example of each layer to copy
 rather than a skeleton to guess at.
 
+It is a simplified version of
+[**`Ddscully/dlt-dbt-duckdb-evidence`**](https://github.com/Ddscully/dlt-dbt-duckdb-evidence),
+which runs this same shape for real: live public sources rebuilt on every push,
+a dashboard deployed to Pages, a monthly release of the warehouse itself, and a
+course teaching the result. This template is that tree with the subject matter,
+the publishing layer and the course cut out, and one trivial source put back so
+every layer keeps a worked example. Go there to see any pattern here at full
+size — in particular
+[`docs/REUSING_THIS_STACK.md`](https://github.com/Ddscully/dlt-dbt-duckdb-evidence/blob/main/docs/REUSING_THIS_STACK.md),
+the long-form argument behind the decisions this template has already made for
+you.
+
 ## Start
 
 ```bash
