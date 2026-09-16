@@ -6,7 +6,7 @@ Replaces `my_warehouse` and `my-warehouse` in every file git tracks — the
 distribution name, the dbt project and profile, the dlt pipeline name, the
 Dagster code location, the Evidence package and the lockfiles that repeat them.
 
-Three things it deliberately does not touch:
+Four things it deliberately does not touch:
 
 * **the package**, `src/modern_data_stack/`. `[tool.uv.build-backend]
   module-name` in pyproject.toml decouples it from the project name, so every
@@ -16,6 +16,9 @@ Three things it deliberately does not touch:
   it.
 * **`warehouse.duckdb`**, the file's name, which dbt also writes into those
   fully-qualified view definitions.
+* **`repo-local`**, the Claude Code marketplace id in `.claude/settings.json`.
+  It names a role, not this project, exactly so a rename never has to reach it;
+  making it project-derived would leave every adopter carrying a stale id.
 
 It skips itself, so this file keeps naming the placeholder and a second run
 reports that there is nothing left to rename.

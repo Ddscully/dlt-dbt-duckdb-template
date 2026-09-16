@@ -3,13 +3,13 @@
     "dbt-agent-marketplace": {
       "source": { "source": "github", "repo": "dbt-labs/dbt-agent-skills" }
     },
-    "modern-data-stack": {
+    "repo-local": {
       "source": { "source": "directory", "path": "./.claude/marketplace" }
     }
   },
   "enabledPlugins": {
     "dbt@dbt-agent-marketplace": true,
-    "ty-lsp@modern-data-stack": true
+    "ty-lsp@repo-local": true
   },
   "permissions": {
     "allow": [

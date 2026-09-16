@@ -23,7 +23,7 @@ knowledge.
 | Plugin | Covers |
 |--------|--------|
 | `dbt@dbt-agent-marketplace` | [dbt Labs' skills](https://github.com/dbt-labs/dbt-agent-skills) — models, tests, docs, debugging |
-| `ty-lsp@modern-data-stack` | this repo's own ty language server, below |
+| `ty-lsp@repo-local` | this repo's own ty language server, below |
 
 **Retire a plugin by deleting its entry, never with `false`.** A `false` entry
 reads as a declaration and does nothing.

@@ -91,6 +91,15 @@ Two names must not be changed: the `lakehouse` ATTACH alias, which is baked into
 stored view SQL, and the `warehouse.duckdb` filename, which dbt writes into
 fully-qualified view definitions.
 
+Renaming the *directory* is a separate thing, and it invalidates an existing
+DuckLake catalog: the catalog stores its `data_path` as an absolute string, so
+the next command fails with `DATA_PATH parameter ... does not match existing
+data path`, naming two paths rather than the move. After moving the project,
+delete `data/` and re-run, or attach once with `OVERRIDE_DATA_PATH`. Moving it
+also leaves `.venv/bin/activate` pointing at the old path — `uv run` does not
+read that file, so only `source .venv/bin/activate` notices; `uv sync` alone
+does not repair it, so recreate the venv.
+
 Also yours to edit: the `authors` line in `pyproject.toml`, the owner in
 `dbt/models/_groups.yml` and `_exposures.yml`, and `LICENSE`.
 

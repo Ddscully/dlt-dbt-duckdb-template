@@ -42,7 +42,7 @@ repo. By hand:
 
 ```bash
 claude plugin marketplace add ./.claude/marketplace
-claude plugin install ty-lsp@modern-data-stack
+claude plugin install ty-lsp@repo-local
 ```
 
 `just typecheck` is the same checker without the editor.

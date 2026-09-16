@@ -134,7 +134,10 @@ everything else into `data/warehouse.duckdb`. The full account is
   DuckLake compares the stored `data_path` as a string, so dlt and dbt spelling
   one directory two ways is refused inside `dbt build`, a layer downstream of the
   cause. `.github/actions/setup` is the one definition of that environment for
-  the workflows.
+  the workflows. It is one string across *time* too: **renaming or moving the
+  project directory invalidates an existing catalog**, and DuckDB names the two
+  paths rather than the move. Rebuild the landing zone, or attach once with
+  `OVERRIDE_DATA_PATH`.
 - **`data/lakehouse/` is the only copy of every landing table**, so `just clean`
   never takes it, and `analytics.pipeline_runs` is appended rather than rebuilt.
 
