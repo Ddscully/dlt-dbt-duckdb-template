@@ -56,9 +56,8 @@ WAREHOUSE_SCHEMAS = ("raw", "staging", "marts", "analytics", "history")
 # What writes each table the source queries read; `orchestration/assets.py` turns
 # these into the Evidence asset's deps. dbt models go by model name (their asset
 # keys come from the manifest), Polars outputs by asset key — the four
-# `pipeline_*` tables share one, written by a single op. No page reads
-# `history.snap_*` directly; the snapshots reach the site through the marts that
-# summarise them.
+# `pipeline_*` tables share one, written by a single op. A table no page reads
+# needs no entry — what is listed here is what the site depends on.
 #
 # Here rather than beside the asset so `tests/test_report.py` can check them
 # against the SQL without Dagster, whose dbt manifest `just test` does not have.
@@ -87,7 +86,7 @@ _QUERY_REF = re.compile(r"\b(?:from|join)\s+([a-z_][a-z_0-9]*\.[a-z_][a-z_0-9]*)
 
 
 def source_tables(sources_dir: Path = SOURCES_DIR) -> set[str]:
-    """Every `<schema>.<table>` the source queries read, e.g. `{"marts.dim_country_year", …}`.
+    """Every `<schema>.<table>` the source queries read, e.g. `{"marts.fct_gold_price_month", …}`.
 
     The site's place in the asset graph is decided by this set: the asset declares
     a dep per backing asset, and `tests/test_report.py` fails if a source query
@@ -95,8 +94,8 @@ def source_tables(sources_dir: Path = SOURCES_DIR) -> set[str]:
     new mart would leave the site building from a stale copy of it — with the
     graph still looking correctly ordered.
 
-    Comments are stripped first, or `latest_years.sql`'s coverage table (which
-    names columns, not tables) would be parsed as SQL.
+    Comments are stripped first: a query that documents itself with a table-like
+    name in a `--` comment would otherwise be read as depending on it.
     """
     tables = set()
     for query_tables in source_query_tables(sources_dir).values():
@@ -123,11 +122,11 @@ def source_query_tables(sources_dir: Path = SOURCES_DIR) -> dict[str, set[str]]:
 def page_tables(
     pages_dir: Path = PAGES_DIR, sources_dir: Path = SOURCES_DIR
 ) -> dict[str, set[str]]:
-    """`{"retail": {"marts.fct_retail_order_line", …}, …}` — warehouse tables per page.
+    """`{"gold": {"marts.fct_gold_price_month", …}, …}` — warehouse tables per page.
 
     Two hops: a page's SQL blocks read `warehouse.<query>`, and the query reads the
     warehouse. The exposures in `dbt/models/_exposures.yml` are checked against
-    this, so `dbt ls --select +exposure:evidence_retail` answers "what breaks if I
+    this, so `dbt ls --select +exposure:evidence_gold` answers "what breaks if I
     change this model" for one page.
 
     A page naming a query that doesn't exist raises: Evidence fails that build
@@ -151,7 +150,7 @@ def page_tables(
 
 
 def page_routes(pages_dir: Path = PAGES_DIR, build_dir: Path = BUILD_DIR) -> dict[str, Path]:
-    """`{"index": build/index.html, "findings": build/findings/index.html, …}`.
+    """`{"index": build/index.html, "gold": build/gold/index.html, …}`.
 
     The asset check reads this: `evidence build` exits 0 whether or not it emitted
     a page for every markdown file, so "the build succeeded" is not the same claim

@@ -10,14 +10,3 @@ exposures:
     owner:
       name: Data team
       email: owner@example.com
-
-  - name: published_data_release
-    label: Data release (GitHub)
-    type: application
-    description: Every mart, published as DuckDB and Parquet.
-    depends_on:
-      - ref('dim_month')
-      - ref('fct_gold_price_month')
-    owner:
-      name: Data team
-      email: owner@example.com

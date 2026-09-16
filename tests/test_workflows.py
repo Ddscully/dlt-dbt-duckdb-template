@@ -332,9 +332,9 @@ def test_every_recipe_that_writes_says_where_it_is_writing():
     What varies is the file, and no dbt output prints it.
 
     So a recipe that writes either depends on `where`, or exports its own
-    `WAREHOUSE_PATH` and announces that itself — `test-pipeline` and the two
-    course recipes do the latter, and taking `where` as a dependency there would
-    print the *outer* value, which is worse than printing nothing.
+    `WAREHOUSE_PATH` and announces that itself — `test-pipeline` does the
+    latter, and taking `where` as a dependency there would print the *outer*
+    value, which is worse than printing nothing.
     """
     silent = []
     for name, (deps, body) in sorted(writing_recipes().items()):

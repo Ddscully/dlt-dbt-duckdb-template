@@ -1,24 +1,19 @@
 """Dagster entry point: `dagster dev` (see `[tool.dagster]` in pyproject.toml).
 
-Everything `just run` does, as one asset graph, plus the Evidence site. Three jobs:
+Everything `just run` does, as one asset graph, plus the Evidence site. Two jobs:
 
-* `load_retail` — the month-partitioned retail load. `define_asset_job` resolves
-  a selection to one `partitions_def` or raises, with no opt-out for a named job,
-  and retail is monthly where `raw/wb_wdi` and `raw/om_weather_daily` are yearly.
-* `full_refresh` — everything else bar the site. Pure Python, so `ci.yml`,
-  `nightly.yml` and `release-data.yml` run it without Node; the daily schedule
-  targets it.
+* `full_refresh` — everything bar the site. Pure Python, so every workflow can
+  run it without Node; the daily schedule targets it.
 * `publish_site` — `full_refresh` plus `reports/evidence_site`, which shells out
-  to npm. `pages.yml` runs it.
+  to npm.
 
-`load_retail` must run first, because `dbt build` reads
-`raw.retail_invoice_lines`; the justfile recipes and all four workflows pair the
-jobs. It is not called `ingest_retail` because jobs share a namespace with ops,
-and the retail `@dlt_assets` op has that name.
-
-Both selections name what they exclude, so a new asset joins `full_refresh`
-automatically; a second npm-shaped or differently-partitioned asset has to be
-excluded by hand.
+`full_refresh` is defined by *exclusion* (`AssetSelection.all() - site`), so a
+new asset joins it automatically. Two things have to be excluded by hand: a
+second asset that needs Node, and a **partitioned** one — `define_asset_job`
+resolves a selection to a single `partitions_def` or raises, so a monthly and a
+yearly asset cannot share a job. That is when a project grows a third job, and
+it is named for the load rather than the op, because jobs and ops share a
+namespace.
 """
 
 from __future__ import annotations

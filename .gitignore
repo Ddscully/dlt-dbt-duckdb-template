@@ -20,21 +20,12 @@ htmlcov/
 data/*.duckdb
 data/*.duckdb.wal
 data/raw/
-# Workbooks the seed scripts download (`scripts/build_*_seed*.py` without
-# `--xlsx`). The seeds they produce are checked in; the sources are not.
+# Anything a source script downloads and the pipeline re-reads. The seeds and
+# fixtures built *from* such a file are checked in; the file itself is not.
 data/*.xlsx
-# Publishable artifact built by `just export-data`; it lives in GitHub releases
-data/export/
-# The retired hive Parquet archive. **Keep this entry**: older clones still have
-# the directory on disk, and without it `git add -A` would stage it
-# (`just clean` deletes it).
-data/lake/
-# Downloads kept between runs so a partitioned load does not re-fetch the retail
-# zip per partition. Copies of what the URL serves — safe to delete.
+# Copies of what a URL served, kept between runs so a partitioned or repeated
+# load does not re-fetch. Safe to delete.
 data/cache/
-# The course sandbox (`just course-sandbox`), a fixture warehouse the exercises
-# break on purpose. Safe to delete.
-data/course/
 *.csv
 !dbt/seeds/*.csv
 # Unit-test fixtures are source, like the seeds. Without this line `dbt test`
@@ -67,11 +58,12 @@ reports/.evidence/
 reports/build/
 node_modules/
 
-# Agent session transcripts and scratch notes: a local working record,
-# never committed. What should outlive a session belongs in AGENTS.md.
+# Agent session transcripts and scratch notes: a local working record, never
+# committed. What should outlive a session belongs in AGENTS.md or a skill.
 docs/sessions/
 
-# The DuckLake landing zone, filled by `just ingest`. **Holds state no rebuild
-# reproduces** — the snapshot lineage and the weather archive, which costs days
-# of Open-Meteo's allowance to refetch — so `just clean` skips it.
+# The DuckLake landing zone, filled by `just ingest`. It is **the only copy of
+# every landing table**, so `just clean` skips it: re-making it costs whatever
+# the sources charge to fetch again, which for a rate-limited or paid API is the
+# whole archive.
 data/lakehouse/

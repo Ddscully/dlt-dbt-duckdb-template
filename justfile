@@ -82,8 +82,10 @@ dbt-build: where dbt-deps
 dbt-parse: dbt-deps
     cd dbt && uv run dbt parse
 
-# The models' parents must exist in the warehouse (schema only); run
-# `just dbt-build` once if they don't.
+# Selects nothing until a model carries a `unit_tests:` block — the fixtures go
+# in `dbt/tests/fixtures/`, which `.gitignore` already excepts from `*.csv`. The
+# models' parents must exist in the warehouse (schema only); run `just dbt-build`
+# once if they don't.
 # dbt unit tests only — mocked inputs, the inner loop for model logic
 dbt-unit-test: dbt-deps
     cd dbt && uv run dbt test --select test_type:unit
@@ -209,10 +211,13 @@ sql mode="read":
     fi
 
 # From dbt/, because the dbt templater resolves the profile's relative
-# `../data/…` default against the working directory.
+# `../data/…` default against the working directory. `snapshots` is passed only
+# when it exists: sqlfluff exits `User Error: Specified path does not exist` on a
+# directory git cannot track once its .gitkeep is gone, which would red-light CI
+# for a project that simply has no snapshots.
 # Lint the dbt models and snapshots with sqlfluff
 lint: dbt-deps
-    cd dbt && uv run sqlfluff lint models snapshots
+    cd dbt && uv run sqlfluff lint models $([ -d snapshots ] && echo snapshots)
 
 # ty is pre-1.0 and runs in neither pre-commit nor CI; `uv run` so the locked
 # version answers. Suppressions go inline as `# ty: ignore[rule]`.

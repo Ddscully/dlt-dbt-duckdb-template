@@ -29,8 +29,9 @@ def gold_prices_monthly():
   from the first rows otherwise, so a column that is empty at the top of the
   file arrives as null.
 - **Reach shared helpers through the module** — `http.get_json(...)`, never
-  `from ingest.http import get_json`. The tests patch them through the module,
-  and a by-name import binds the unpatched original.
+  `from ingest.http import get_json`. A unit test for the source patches them
+  through the module; a by-name import binds the unpatched original, and the
+  test then passes while exercising the real fetch.
 - Then register it in `ingest/pipeline.py`: add it to the `@dlt.source`, and to
   **exactly one** of `FULL_REFRESH_RESOURCES` or `INCREMENTAL_RESOURCES`.
 

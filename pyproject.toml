@@ -1,7 +1,7 @@
 [project]
 name = "my-warehouse"
 version = "0.1.0"
-description = "A public-data warehouse built end to end: dlt → DuckLake → dbt → Polars → Evidence, orchestrated by Dagster."
+description = "A local analytics stack, end to end: dlt → DuckLake → dbt → Polars → Evidence, orchestrated by Dagster."
 readme = "README.md"
 authors = [{ name = "Your Name", email = "you@example.com" }]
 requires-python = ">=3.13"
@@ -16,6 +16,10 @@ dependencies = [
     # every transform here.
     "pyarrow>=17",        # DuckDB's Arrow bridge — needed by the ingest and both transforms
     "dbt-duckdb>=1.9",    # T: dbt adapter targeting the DuckDB file
+    # Used by `ingest/http.py`. dlt depends on it too, so leaving it out
+    # resolves — until dlt drops it, at which point the ingest layer breaks for
+    # a reason nothing in this file explains.
+    "requests>=2.32",     # EL: the JSON fetch helpers
 ]
 
 [dependency-groups]

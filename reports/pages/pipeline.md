@@ -75,9 +75,10 @@ order by layer, table_name
     <Column id=year_max title="To" fmt="0"/>
 </DataTable>
 
-A dimension being larger than the fact it feeds is the design, not a defect:
-the spine carries every period, and the fact carries the periods some source
-reported. The gap between the two is what a coverage question is about.
+`marts.fct_gold_price_month` sits on the `dim_month` spine, so the two carry
+the same number of rows and a month nobody has priced is a row with a null
+rather than a missing one. Once a second source arrives at a different grain,
+the gap between a spine and the fact on it is where a coverage question lives.
 
 `analytics.pipeline_runs` is the row above that a rebuild cannot reproduce — one
 row per dbt node per invocation, appended, because each build overwrites the
@@ -133,10 +134,10 @@ not just return a count. It leaves the offending rows behind in
 `dbt_test__audit.<test_name>`, and a red check gives you the rows rather than a
 number.
 
-The bounds are calibrated to fail on bugs and not on reality, which sometimes
-means *not* testing a column. `trade_co2_share` has no range test because its
-real range runs from about −98% to +1023%, and `income_group` is nullable on
-purpose because the World Bank does not classify every territory.
+Bounds are worth calibrating to fail on bugs and not on reality, which
+sometimes means *not* testing a column: a measure whose honest range is wide
+enough to admit any plausible bug is better left untested than given a bound
+nobody believes.
 
 ## Currently failing
 
@@ -205,11 +206,11 @@ The most recent build ran <Value data={run_totals} column=latest_nodes fmt="#,##
 
 <Alert status=info>
 
-**So what.** The data-quality layer *is* the build. Tests and unit tests together
-cost several times what building every model costs — the price of
-`store_failures` being on project-wide and of running unit tests inside
-`dbt build` rather than excluding them from production runs. Both are deliberate
-and both are argued in the docs; neither had ever been measured.
+**So what.** On a warehouse this size the models are not the cost — the tests
+are, and `store_failures` being on project-wide is part of why. That is a trade
+worth making knowingly: it buys the failing rows themselves instead of a count.
+This table is where you find out what it actually costs you, rather than
+guessing.
 
 The seconds do not sum to the per-node total. dbt reports `compile` and
 `execute` as named phases and counts work outside both in the figure it calls

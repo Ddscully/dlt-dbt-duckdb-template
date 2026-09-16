@@ -112,8 +112,12 @@ def main() -> None:
         f"\nrenamed to {args.name} in {len(changed)} files. Next:\n"
         "  uv sync --group dev --group orchestration   # the distribution name changed\n"
         "  just test\n"
-        "Then edit `authors` in pyproject.toml, the owners in dbt/models/_groups.yml\n"
-        "and _exposures.yml, LICENSE, and this README."
+        "Then edit `authors` in pyproject.toml, the owner in dbt/models/_groups.yml\n"
+        "and dbt/models/_exposures.yml, and LICENSE. Delete the 'Renaming'\n"
+        "sections of README.md and AGENTS.md: this run rewrote the placeholder\n"
+        "inside them, so they now describe a rename that has already happened.\n"
+        "Wrong name? `git checkout .` and run it again — the placeholder is gone\n"
+        "from the tree, so a second run has nothing to find."
     )
 
 

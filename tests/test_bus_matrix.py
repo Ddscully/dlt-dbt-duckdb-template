@@ -115,13 +115,13 @@ def test_a_mart_that_is_neither_a_dimension_nor_a_fact_is_reported_not_dropped(m
     )
 
     manifest = json.loads(Path(manifest_path).read_text())
-    manifest["nodes"]["model.test.bridge_country_region"] = {
+    manifest["nodes"]["model.test.bridge_region_market"] = {
         "resource_type": "model",
         "schema": SCHEMA,
-        "name": "bridge_country_region",
-        "alias": "bridge_country_region",
-        "unique_id": "model.test.bridge_country_region",
-        "columns": {"country_iso3": {}, "region_key": {}},
+        "name": "bridge_region_market",
+        "alias": "bridge_region_market",
+        "unique_id": "model.test.bridge_region_market",
+        "columns": {"region_key": {}, "market_key": {}},
     }
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
         json.dump(manifest, handle)
@@ -131,5 +131,5 @@ def test_a_mart_that_is_neither_a_dimension_nor_a_fact_is_reported_not_dropped(m
     finally:
         Path(injected).unlink()
 
-    assert built.unclassified == ("bridge_country_region",)
+    assert built.unclassified == ("bridge_region_market",)
     assert any("neither a dimension nor a fact" in note for note in bus_matrix.key_notes(built))

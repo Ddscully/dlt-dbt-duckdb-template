@@ -54,8 +54,8 @@ def test_every_asset_defined_is_in_the_graph():
     defined, _ = _defined_in_assets_module()
     # Executable, not `get_all_asset_keys()`: an unregistered asset that
     # something *depends on* still shows up in the graph as an external node, so
-    # the wider set reports `analytics/retail_rfm` present purely because
-    # `pipeline_status` names it in `deps`.
+    # the wider set would report a forgotten Polars asset as present purely
+    # because `pipeline_status` names it in `deps`.
     in_graph = defs.resolve_asset_graph().executable_asset_keys
 
     missing = defined - in_graph
@@ -87,7 +87,7 @@ def test_every_raw_resource_has_an_asset_description():
     and nothing is red: the Dagster UI shows a blank where every sibling has a
     sentence.
 
-    Lives here rather than in `tests/test_ingest.py` because reading the dict
+    Lives here rather than beside the source's own tests because reading the dict
     means importing `orchestration.assets`, which needs dagster (an optional
     group) and the manifest; this module already carries that skip and is
     re-run by CI after `dbt parse`.
@@ -124,11 +124,10 @@ def test_every_raw_resource_has_an_asset_description():
 def _job_keys(name: str) -> set[dg.AssetKey]:
     """The assets a job actually *materializes*.
 
-    Not `get_all_asset_keys()` — a job's graph also carries the upstream assets it
-    only reads, as unexecutable nodes. `raw/retail_invoice_lines` appears in
-    `full_refresh` that way (the dbt models depend on it) even though the whole
-    point of the selection is that this job does not load it, so the wider set
-    would have made the exclusion test pass while asserting nothing.
+    Not `get_all_asset_keys()` — a job's graph also carries the upstream assets
+    it only reads, as unexecutable nodes. A raw asset excluded from a job still
+    appears in it that way, because the dbt models depend on it, so the wider
+    set would make an exclusion test pass while asserting nothing.
     """
     from orchestration.definitions import defs
 
@@ -138,10 +137,10 @@ def _job_keys(name: str) -> set[dg.AssetKey]:
 def test_the_jobs_between_them_cover_every_asset():
     """Registered is not the same as reachable, and the second one is what runs.
 
-    `full_refresh` excludes the retail *ingest* — it has to, an asset job takes
-    one partitions definition — so the exclusion has to be paid for by
-    `load_retail` rather than dropped. Anything in neither job is built by no
-    workflow.
+    An asset excluded from `full_refresh` — because it needs Node, or because it
+    is partitioned differently — has to be paid for by another job rather than
+    dropped. Anything in no job is built by no workflow, and nothing else says
+    so: `dagster definitions validate` passes on it.
     """
     from orchestration import assets
 

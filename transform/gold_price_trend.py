@@ -24,16 +24,22 @@ WINDOW_MONTHS = 12
 
 
 def build_gold_price_trend(df: pl.DataFrame) -> pl.DataFrame:
-    """The rolling year and the change on a year earlier, per month.
+    """The rolling year and the change on a year earlier, per priced month.
 
-    Priced months only. The fact sits on the `dim_month` spine, so it carries a
-    row for every month including ones the publisher has not priced yet; a
-    rolling mean over those would average a shorter window and report it as a
-    full one. Dropping them first is also what makes `shift(12)` mean "twelve
-    months ago" rather than "twelve rows ago, whatever they were".
+    **Both windows are computed over the complete `dim_month` spine, and the
+    unpriced months are dropped afterwards.** That ordering is the whole point
+    of the fact sitting on a spine: over the spine, `shift(12)` is twelve
+    *months*, and `rolling_mean(12)` is a calendar year. Filter first and both
+    become "twelve priced rows", so a series with a gap in it — most real
+    monthly series have one — would compare the wrong period and report it as a
+    year-on-year change, with nothing to say it had.
+
+    A window that overlaps an unpriced month yields null rather than a number
+    computed from fewer observations, which is the honest answer and the reason
+    this is worth doing in Polars rather than in SQL.
     """
-    priced = df.filter(pl.col("price_usd_per_troy_oz").is_not_null()).sort("month_start")
-    return priced.with_columns(
+    spine = df.sort("month_start")
+    return spine.with_columns(
         pl.col("price_usd_per_troy_oz")
         .rolling_mean(window_size=WINDOW_MONTHS)
         .alias("rolling_12m_avg_usd"),
@@ -41,7 +47,7 @@ def build_gold_price_trend(df: pl.DataFrame) -> pl.DataFrame:
             (pl.col("price_usd_per_troy_oz") / pl.col("price_usd_per_troy_oz").shift(WINDOW_MONTHS))
             - 1
         ).alias("yoy_change_pct"),
-    )
+    ).filter(pl.col("price_usd_per_troy_oz").is_not_null())
 
 
 def run(duckdb_path: str = DUCKDB_PATH) -> int:

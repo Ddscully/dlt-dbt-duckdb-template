@@ -2,10 +2,10 @@ appearance:
   default: system
   switcher: true
 
-# Chosen for both modes against colorblind (protanopia/deuteranopia) and
-# normal-vision separation floors. Not every pair clears every check:
-# reports/README.md ("Chart colors") says which subsets do, and has the
-# per-series `seriesColors` maps built on them.
+# Chosen for both light and dark against colorblind
+# (protanopia/deuteranopia) and normal-vision separation floors. Adding series
+# colours? Check the pair you add against the same floors — a palette that
+# separates for you may be one colour for a tenth of your readers.
 theme:
   colors:
     primary:

@@ -56,7 +56,7 @@ def scalar(
     """The first column of the single row `sql` returns.
 
     Typed `Any` because the result genuinely varies (int, date, str); the few
-    callers that do arithmetic narrow locally, as `transform/retail_rfm.py` does.
+    callers that do arithmetic narrow locally, at the point they need a number.
     """
     return row(con, sql, params)[0]
 

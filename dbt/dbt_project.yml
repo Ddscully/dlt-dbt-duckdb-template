@@ -33,8 +33,9 @@ models:
       +materialized: view
       +schema: staging
       # A group's working copy of a source, not an interface: only models in the
-      # same group may `ref` it. The two `protected` overrides in `_staging.yml`
-      # are the only places one domain reads another's cleaning layer.
+      # same group may `ref` it. One group that has to read another's cleaning
+      # layer sets `access: protected` on that model — visibly, one model at a
+      # time, rather than by widening this.
       +access: private
     # An `intermediate:` block goes here when models/intermediate/ exists. dbt
     # warns on config for a directory with no models in it, so it is commented
@@ -50,11 +51,12 @@ models:
     marts:
       +materialized: table
       +schema: marts
-      # The interface: the monthly release ships every mart as Parquet.
+      # The interface. Everything outside dbt — the dashboard, a notebook,
+      # another project — reads a mart and nothing else.
       +access: public
       # One folder per subject area, matching `_groups.yml`, so `+group:` is set
-      # per folder. All four inherit `+schema: marts`, so relation names, the
-      # release layout and asset keys ignore the nesting.
+      # per folder. Every folder inherits `+schema: marts`, so relation names and
+      # asset keys ignore the nesting.
       gold:
         +group: gold
 

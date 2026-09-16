@@ -51,7 +51,8 @@ src/modern_data_stack/   the domain-neutral mechanisms every layer calls
 
 - **`ingest/` is one module per publisher**, plus `pipeline.py`'s coordination
   tuples. Shared helpers are reached as `http.get_json(...)`, never imported by
-  name, because the tests patch them through the module.
+  name, so a source's unit test can patch them through the module — a name bound
+  at import time is not looked up through that patch.
 - **The package takes its configuration as arguments.** `lake/lakehouse.py`,
   `transform/*.py` and the rest hold this project's constants and stay the entry
   points. Nothing under `src/` knows what this project's data is about.
@@ -192,8 +193,9 @@ Two tiers, and the split is the point — see [`tests/README.md`](tests/README.m
   passes either way; the *next* command against the real warehouse is the one
   that is wrong.
 - **A recorded fixture can be ignored by git and pass everywhere but CI.**
-  `.gitignore` excepts `tests/fixtures/ingest/*.csv` and `dbt/tests/fixtures/*.csv`
-  from its `*.csv` rule. A new directory of CSV fixtures needs its own line.
+  `.gitignore` excepts `tests/fixtures/ingest/*.csv` from its `*.csv` rule, and
+  `dbt/tests/fixtures/*.csv` for when this project grows dbt unit tests. A new
+  directory of CSV fixtures needs its own line.
 - **A test earns its place by mutation**: break the thing it guards and check
   that it goes red. A test that cannot be made to fail is decoration.
 - **A wall-clock figure drifts, and nothing can guard it.** Date a timing when
@@ -210,10 +212,15 @@ sqlfluff, ruff and ty behave is the `linting-and-type-checking` skill.
   prose.** Put the rule after the explanation and keep the real directive, with
   its colon, on the code line.
 
-## Renaming this project
+## Renaming this project (template scaffolding)
 
-`my_warehouse` / `my-warehouse` is the placeholder;
+Until it is renamed the project is called `my_warehouse` / `my-warehouse`, and
 `uv run python -m scripts.rename_project <name>` replaces both across every
-tracked file. The package stays `modern_data_stack`, and two names must not
-change: the `lakehouse` ATTACH alias and the `warehouse.duckdb` filename, both
-baked into stored view SQL.
+tracked file — this paragraph included, so delete it once the rename is done
+rather than reading it afterwards. `scripts/rename_project.py` skips itself and
+stays the one honest record of what the placeholder was; `git checkout .` undoes
+a typo'd run.
+
+The package stays `modern_data_stack`, and two names must not change: the
+`lakehouse` ATTACH alias and the `warehouse.duckdb` filename, both baked into
+stored view SQL.

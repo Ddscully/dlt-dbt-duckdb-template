@@ -114,19 +114,19 @@ class RawSchemaDltTranslator(DagsterDltTranslator):
 
 
 @dlt_assets(
-    # Everything that isn't year-partitioned: the four `replace` resources plus
-    # `ecb_fx_rates`, which merges but has no per-year fetch to express. The
-    # mixed dispositions are fine here because the body asks `load_groups` for
-    # the kwargs rather than spelling them.
+    # Everything the orchestration layer does not partition. Mixed load
+    # dispositions are fine here because the body asks `load_groups` for each
+    # group's `run()` kwargs rather than spelling them.
     dlt_source=public_indicators().with_resources(*UNPARTITIONED_RESOURCES),
     dlt_pipeline=build_pipeline(),
     dagster_dlt_translator=RawSchemaDltTranslator(),
     name="ingest_public_indicators",
 )
 def raw_assets(context: AssetExecutionContext, dlt: DagsterDltResource):
-    # One op for all five: the catalog takes a single writer, so parallel steps
-    # would only contend for it. `load_groups` supplies the `run()` kwargs, as it
-    # does for the CLI, and takes the selection so one asset means one load.
+    # One op for every resource: the catalog takes a single writer, so parallel
+    # steps would only contend for it. `load_groups` supplies the `run()` kwargs,
+    # as it does for the CLI, and takes the selection so one asset means one
+    # load.
     selected = {key.path[-1] for key in context.selected_asset_keys}
     for names, kwargs in load_groups(selected):
         context.log.info("loading %s (%s)", ", ".join(names), kwargs)

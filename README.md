@@ -73,12 +73,15 @@ dlt resource in `ingest/sources/`, a row in `_sources.yml`, a `stg_` model, a
 mart with a contract and a uniqueness test, a recorded fixture so CI stays
 offline, and a page in `reports/pages/`. Then delete the gold example.
 
-## Renaming
+## Renaming (template scaffolding — delete this section once you have)
 
-The project name appears in `pyproject.toml`, `dbt_project.yml` (four keys),
-`dbt/profiles.yml`, the dlt pipeline name, the Dagster code location and the
-Evidence package — as `my_warehouse` and `my-warehouse`.
-`scripts/rename_project.py` replaces both spellings across every tracked file.
+Out of the box the project is called `my_warehouse` / `my-warehouse`. That name
+appears in `pyproject.toml`, `dbt_project.yml` (four keys), `dbt/profiles.yml`,
+the dlt pipeline name, the Dagster code location and the Evidence package.
+`scripts/rename_project.py` replaces both spellings across every tracked file —
+including this paragraph, which is why it is worth deleting rather than
+believing afterwards. Run it on a clean tree: `git checkout .` is how you undo
+a typo'd name, since the script has only the one placeholder to look for.
 
 The **package** stays `modern_data_stack` whatever the project is called:
 `[tool.uv.build-backend] module-name` in `pyproject.toml` decouples the two, so

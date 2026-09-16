@@ -5,10 +5,10 @@ recorded from the same endpoint, so the whole pipeline — dlt schema inference,
 dbt, Polars, the asset checks — runs offline and deterministically, and a CI
 failure means the repo broke rather than a publisher being down.
 
-The fixtures are trimmed to a representative set of countries by
-`scripts/record_fixtures.py`, which also re-records them. Each is the source's
-own format (gzipped CSV for OWID, the API's response body for the JSON sources,
-a zip for retail), so the parsing paths production uses run in CI too.
+`scripts/record_fixtures.py` records them. Each is kept in the source's own
+format — a CSV stays a CSV, an API response stays its response body — so the
+parsing paths production uses run in CI too. Rows may be trimmed to keep a file
+small; columns never are, or a renamed upstream field passes CI.
 
 The mechanism is `modern_data_stack.fixtures`; this module is the URL-to-file
 map for this project's sources.

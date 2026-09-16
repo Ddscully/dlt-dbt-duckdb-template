@@ -1,7 +1,6 @@
 """The declared consumers, checked against the ones that actually exist.
 
-`dbt/models/_exposures.yml` says which models each Evidence page and the monthly
-data release depend on. Nothing in dbt can verify that — an exposure is an
+`dbt/models/_exposures.yml` says which models each Evidence page depends on. Nothing in dbt can verify that — an exposure is an
 assertion about the *outside* of the project, so a stale one is invisible: `dbt
 build` stays green, `dbt ls --select +exposure:*` keeps answering, and the answer
 is quietly wrong. These tests are the other half of it, resolving page → source
@@ -28,7 +27,7 @@ _REF = re.compile(r"ref\(\s*'([a-z_0-9]+)'\s*\)")
 
 
 def exposures() -> dict[str, dict]:
-    """`{"evidence_retail": {…}, …}`, straight out of the yml."""
+    """`{"evidence_gold": {…}, …}`, straight out of the yml."""
     parsed = yaml.safe_load(EXPOSURES_YML.read_text())
     return {exposure["name"]: exposure for exposure in parsed["exposures"]}
 
@@ -43,7 +42,7 @@ def declared_models(name: str) -> set[str]:
 
 
 def page_models() -> dict[str, set[str]]:
-    """`{"retail": {"fct_retail_order_line", …}, …}` — the dbt models each page reads."""
+    """`{"gold": {"fct_gold_price_month", …}, …}` — the dbt models each page reads."""
     return {
         page: {
             build_report.TABLE_TO_DBT_MODEL[t]
@@ -110,26 +109,3 @@ def test_the_tables_no_exposure_can_name_are_exactly_the_polars_outputs():
         if table not in build_report.TABLE_TO_DBT_MODEL
     }
     assert invisible == set(build_report.TABLE_TO_ASSET_KEY)
-
-
-def test_the_release_exposure_names_every_mart():
-    """The data release ships every table in `marts`, so the exposure has to list them all.
-
-    `publish/export_warehouse.py` iterates the schema rather than a table list, so a
-    new mart is published the moment it is built — silently, to consumers outside
-    this repo who cannot be paged. That is the one dependency here nobody can
-    discover by reading the site, which is why it is asserted rather than described.
-    """
-    declared = declared_models("published_data_release")
-    # A versioned model's `_v1.sql` / `_v2.sql` are two files and one model: an
-    # exposure names the model, and `ref()` without a `v=` resolves to the latest
-    # version. Both relations ship in the release, and both are covered by the one
-    # declaration.
-    # `rglob`, because the marts layer is one folder per dbt group. Compared in
-    # both directions, so a glob that matches nothing fails rather than passing
-    # "nothing undeclared".
-    marts = {re.sub(r"_v\d+$", "", sql.stem) for sql in MARTS_DIR.rglob("*.sql")}
-    assert marts - declared == set(), "mart published by the release but not declared"
-    # And nothing but marts: a staging model has no place in the promise a
-    # release makes.
-    assert declared - marts == set()

@@ -14,15 +14,15 @@ tests, columns from the enforced contracts.
 
 Two rules decide what the derivation trusts:
 
-- **A uniqueness test carrying a `where` is not a grain.**
-  `dim_grid_emission_factors` asserts one row per `country_iso3` only where
-  `is_latest_available`; read as a grain, it would look like a conformed country
-  dimension every fact conforms to.
+- **A uniqueness test carrying a `where` is not a grain.** A versioned
+  reference table asserting one row per entity *where current* is the common
+  case; read as a grain, it would look like a conformed dimension that every
+  fact conforms to.
 - **Conformance is exact column-name matching.** An alias list would render a
   key spelled differently as a mark, hiding the defect the matrix exists to
   expose. A hole is a question, not a bug in the derivation.
 
-Nothing in this module knows what a country is. The schema and the naming
+Nothing in this module knows what this project's entities are. The naming
 prefixes arrive as arguments; see the project entry point for this warehouse's.
 """
 
@@ -59,9 +59,9 @@ class Fact:
 class BusMatrix:
     dimensions: tuple[Dimension, ...]
     facts: tuple[Fact, ...]
-    # Dimension-named models with no single-column grain (`dim_country_year` is
-    # at `(country_iso3, year)`). Reported rather than dropped, so the matrix
-    # cannot look complete while a `dim_*` model is missing from it.
+    # Dimension-named models with no single-column grain — a `dim_*` at a
+    # composite key. Reported rather than dropped, so the matrix cannot look
+    # complete while one of them is missing from it.
     unconformed: tuple[Dimension, ...]
     # Models matching neither prefix. They would otherwise appear in no row or
     # column, so they are carried out for a caller to fail on.

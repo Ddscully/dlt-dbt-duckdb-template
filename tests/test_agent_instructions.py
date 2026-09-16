@@ -8,7 +8,7 @@ fails without an error:
   session with the plugin section and nothing else.
 - Claude Code reads skills only from `.claude/skills/`, and Codex only from
   `.agents/skills/`. One is a symlink to the other; a real directory in its
-  place is a second copy of eighteen skills, drifting from the first.
+  place is a second copy of every skill, drifting from the first.
 - Codex reads `project_doc_max_bytes` of `AGENTS.md` — 32 KiB by default — and
   cuts the rest, saying so only in a trace log. The budget is one number for
   every `AGENTS.md` from the repo root down to the working directory, root
