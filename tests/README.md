@@ -36,7 +36,9 @@ the Polars layer all execute — offline and deterministically. This is what
 checks are evaluated too).
 
 It sets `WAREHOUSE_PATH` to a temp file, `LAKEHOUSE_DIR` to a temp directory
-beside it, and dbt's artifact paths with them. **Don't drop any of them**:
+beside it, and dbt's artifact paths with them — and, when the landing zone's
+Parquet is in a bucket, `LAKEHOUSE_DATA_PATH` to a `test-pipeline/` prefix in
+that bucket. **Don't drop any of them**:
 without them a fixture run overwrites the real warehouse and landing zone, and
 files the fixture build's timings in the real build history. The fixture run
 passes either way — what breaks is the next command against real data.

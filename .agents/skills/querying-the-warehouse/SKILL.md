@@ -41,6 +41,17 @@ Mid-build, the one read that works is the lakehouse:
 `lake.lakehouse.read_only_connection()` attaches the catalog read-only, and dbt
 holds the *warehouse* file, not that one.
 
+## With the Parquet in a bucket (`LAKEHOUSE_DATA_PATH`)
+
+Attach through `just sql` or `read_only_connection()`, never by hand: both
+create the S3 secret first, and a bare `ATTACH` has none, so DuckDB sends the
+request — access key id included — to AWS.
+
+**A `count(*)` or a numeric `max()` is not a read.** DuckLake answers both from
+its per-file statistics without opening the Parquet, so they succeed with a
+wrong key, through the `staging` views as well. To check the keys, read values:
+`select sum(price) from lakehouse.raw.gold_prices_monthly` gets the 403.
+
 ## A read-only connection, from Python
 
 ```python
