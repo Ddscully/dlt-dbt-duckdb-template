@@ -10,7 +10,8 @@ data/warehouse.duckdb   everything dbt and Polars build — staging, marts, anal
 `just where` prints both. Nothing else in the repo names a warehouse path: every
 layer resolves it through `modern_data_stack.paths`, which reads
 `WAREHOUSE_PATH` and `LAKEHOUSE_DIR` when they are set — which is how
-`just test-pipeline` builds into a throwaway file.
+`just test-pipeline` builds into a throwaway file. The lakehouse's Parquet can
+also live in a bucket instead ([below](#the-parquet-in-an-s3-compatible-bucket)).
 
 ## The layers
 
@@ -43,6 +44,54 @@ archive.
 appended, because each build overwrites the artifact the previous one was read
 from. Deleting `data/warehouse.duckdb` destroys that history. A project that
 adds a dbt snapshot puts a second unreproducible table in the same file.
+
+## The Parquet in an S3-compatible bucket
+
+The catalog is always a local file, but the Parquet under it can live in a
+bucket instead of `data/lakehouse/data/`. One variable switches it,
+`LAKEHOUSE_DATA_PATH=s3://bucket/prefix/`, and three more say how to reach the
+store: `LAKEHOUSE_S3_ENDPOINT` and the standard `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY`. [`.env.example`](../.env.example) has all four, and
+`just where` prints the data path the recipes will use. Unset, everything above
+holds unchanged.
+
+Measured on 2026-09-17 against SeaweedFS in Docker, which is enough to try it
+(`--rm` and no named volume, so stopping the container deletes the bucket):
+
+```sh
+docker run -d --rm --name mds-s3 -p 127.0.0.1:8333:8333 \
+  -e AWS_ACCESS_KEY_ID=test -e AWS_SECRET_ACCESS_KEY=testtest -e S3_BUCKET=lake \
+  chrislusf/seaweedfs mini -dir=/data
+cp .env.example .env    # then uncomment the S3 block
+```
+
+`just test-pipeline`, `just materialize` (13 of 13 asset checks) and `just sql`
+all ran against it with no Parquet on disk, and `sum(price)` over
+`raw.gold_prices_monthly` read back the same as a run on disk.
+
+- **Choose before the first `just ingest`.** The catalog records its data path
+  and DuckLake refuses to attach it with any other, so setting the variable over
+  an existing landing zone fails with `DATA_PATH parameter … does not match`.
+  Moving one means copying the Parquet and rewriting that record, and nothing
+  here does it.
+- **Every connection needs the endpoint and keys.** DuckDB reads no endpoint from
+  the environment, and with no secret it sends the request to AWS, access key id
+  included. So they are spelled three times: `storage_secret()` in
+  `lake/lakehouse.py` (dlt and every Python reader), the `secrets:` block in
+  `dbt/profiles.yml`, and `just sql`. `tests/test_lakehouse.py` holds the first
+  two to each other.
+- **A trailing slash on the endpoint is a 403, not a 404.** DuckDB requests
+  `http://host:8333//lake/…`, the signed path no longer matches, and the store
+  refuses the write and the read as Forbidden — which reads as a wrong key.
+  Every spelling strips it.
+- **Throwaway runs keep the storage, not the place.** `just test-pipeline` writes
+  its fixture Parquet under `test-pipeline/` in the same bucket; the test suite
+  is always on disk.
+- **A green `just lakehouse` does not prove the keys**, and nor does a
+  `count(*)` or a numeric `max()`: all three are answered from the catalog's
+  statistics and read no Parquet, so they answer with a wrong key — through the
+  `staging` view too. Reading values fails with a 403 as it should:
+  `select sum(price) from lakehouse.raw.gold_prices_monthly` in `just sql`.
 
 ## The bus matrix
 

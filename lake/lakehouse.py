@@ -20,10 +20,17 @@ A DuckLake catalog stores its `data_path` as given and compares it as a string
 on every attach. The catalog is read by dlt from the repo root and by dbt from
 `dbt/`, so the path must be absolute or one directory becomes two strings and
 the attach is refused — which is why `just` exports an absolute `LAKEHOUSE_DIR`.
+
+## The Parquet in a bucket
+
+`LAKEHOUSE_DATA_PATH=s3://bucket/prefix/` puts the data files on S3-compatible
+storage; the catalog stays a local file either way. dlt, dbt and every reader
+here then need the endpoint and keys on each connection (`storage_secret`).
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import duckdb
@@ -46,6 +53,14 @@ LAKEHOUSE_DIR = default_lakehouse_dir()
 CATALOG_NAME = "catalog.duckdb"
 DATA_DIRNAME = "data"
 
+# The Parquet can live in a bucket instead of `data/` — see the module docstring.
+# The endpoint has its own variable because DuckDB reads none from the
+# environment; the keys are the standard AWS pair. The region is a default most
+# S3-compatible stores ignore and a signature still needs.
+DATA_PATH_ENV_VAR = "LAKEHOUSE_DATA_PATH"
+S3_ENDPOINT_ENV_VAR = "LAKEHOUSE_S3_ENDPOINT"
+DEFAULT_S3_REGION = "us-east-1"
+
 # The ATTACH name, and therefore the catalog every piece of SQL in the project
 # spells out. dbt's `_sources.yml` says `database: lakehouse`; changing this
 # without changing that splits the graph exactly the way a renamed dlt resource
@@ -60,8 +75,11 @@ __all__ = [
     "ATTACH_ALIAS",
     "CATALOG_NAME",
     "DATA_DIRNAME",
+    "DATA_PATH_ENV_VAR",
+    "DEFAULT_S3_REGION",
     "DLT_COLUMNS",
     "LAKEHOUSE_DIR",
+    "S3_ENDPOINT_ENV_VAR",
     "catalog_path",
     "data_path",
     "dlt_credentials",
@@ -71,6 +89,7 @@ __all__ = [
     "revisions",
     "rows",
     "run",
+    "storage_secret",
     "versions",
 ]
 
@@ -79,8 +98,62 @@ def catalog_path(lakehouse_dir: str | Path = LAKEHOUSE_DIR) -> Path:
     return Path(lakehouse_dir) / CATALOG_NAME
 
 
-def data_path(lakehouse_dir: str | Path = LAKEHOUSE_DIR) -> Path:
-    return Path(lakehouse_dir) / DATA_DIRNAME
+def data_path(lakehouse_dir: str | Path = LAKEHOUSE_DIR) -> str | Path:
+    """Where the Parquet lives: `data/` beside the catalog, or a bucket.
+
+    A bucket is `LAKEHOUSE_DATA_PATH`, returned as the string it was given:
+    `Path` collapses `s3://` to `s3:/`, and dbt reads the same variable, which
+    DuckLake compares as a string. **The variable wins over `lakehouse_dir`**,
+    so a caller pointing at another catalog must redirect or clear it:
+    `just test-pipeline` redirects it, and the test suite clears it.
+    """
+    url = os.environ.get(DATA_PATH_ENV_VAR)
+    if not url:
+        return Path(lakehouse_dir) / DATA_DIRNAME
+    if not url.startswith("s3://"):
+        raise ValueError(
+            f"{DATA_PATH_ENV_VAR}={url!r} is not an s3:// URL. It only moves the "
+            "Parquet to S3-compatible storage; unset it for a landing zone on disk, "
+            "which LAKEHOUSE_DIR places."
+        )
+    return url
+
+
+def storage_secret() -> dict[str, str] | None:
+    """The S3 secret a connection to a bucket `data_path` needs, or None on disk.
+
+    Needed on *every* connection: DuckDB takes no endpoint from the environment,
+    and with no secret it sends the request to AWS, access key id included.
+    `attach()` creates this one, `dbt/profiles.yml` spells the same for dbt, and
+    `dlt_credentials` hands dlt the parts it builds its own from.
+    """
+    return _s3_secret() if isinstance(data_path(), str) else None
+
+
+def _s3_secret() -> dict[str, str]:
+    endpoint = _s3_setting(S3_ENDPOINT_ENV_VAR)
+    scheme, _, host = endpoint.partition("://")
+    if scheme not in ("http", "https") or not host:
+        raise ValueError(
+            f"{S3_ENDPOINT_ENV_VAR}={endpoint!r} needs its scheme, http:// or https:// — "
+            "it decides whether the connection uses TLS."
+        )
+    return {
+        "key_id": _s3_setting("AWS_ACCESS_KEY_ID"),
+        "secret": _s3_setting("AWS_SECRET_ACCESS_KEY"),
+        "endpoint": host.rstrip("/"),
+        "use_ssl": "true" if scheme == "https" else "false",
+        "region": os.environ.get("AWS_REGION") or DEFAULT_S3_REGION,
+    }
+
+
+def _s3_setting(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(
+            f"{DATA_PATH_ENV_VAR} names a bucket, so {name} must be set too (see .env.example)."
+        )
+    return value
 
 
 def dlt_credentials(lakehouse_dir: str | Path = LAKEHOUSE_DIR):
@@ -99,11 +172,35 @@ def dlt_credentials(lakehouse_dir: str | Path = LAKEHOUSE_DIR):
     # exists to tell apart from a real one.
     lake = Path(lakehouse_dir)
     lake.mkdir(parents=True, exist_ok=True)
-    data_path(lake).mkdir(parents=True, exist_ok=True)
+    data = data_path(lake)
+    if isinstance(data, Path):
+        data.mkdir(parents=True, exist_ok=True)
+        storage = f"file://{data}"
+    else:
+        from dlt.common.configuration.specs import AwsCredentials
+        from dlt.common.storages.configuration import FilesystemConfiguration
+
+        # dlt builds its DuckDB secret from these: `http://` in the endpoint
+        # turns TLS off. It needs no s3fs, which it uses for local storage only.
+        # The URL is rebuilt from the secret, not read from the variable, because
+        # dlt strips only the scheme: a trailing slash would reach its secret and
+        # no other.
+        secret = _s3_secret()
+        scheme = "https" if secret["use_ssl"] == "true" else "http"
+        storage = FilesystemConfiguration(
+            bucket_url=data,
+            credentials=AwsCredentials(
+                aws_access_key_id=secret["key_id"],
+                aws_secret_access_key=secret["secret"],
+                endpoint_url=f"{scheme}://{secret['endpoint']}",
+                region_name=secret["region"],
+                s3_url_style="path",
+            ),
+        )
     return DuckLakeCredentials(
         ducklake_name=ATTACH_ALIAS,
         catalog=f"duckdb:///{catalog_path(lake)}",
-        storage=f"file://{data_path(lake)}",
+        storage=storage,
     )
 
 
@@ -146,6 +243,7 @@ def read_only_connection(lakehouse_dir: str | Path = LAKEHOUSE_DIR) -> duckdb.Du
         data_path(lakehouse_dir),
         alias=ATTACH_ALIAS,
         read_only=True,
+        storage_secret=storage_secret(),
     )
     return con
 

@@ -146,6 +146,10 @@ everything else into `data/warehouse.duckdb`. The full account is
   project directory invalidates an existing catalog**, and DuckDB names the two
   paths rather than the move. Rebuild the landing zone, or attach once with
   `OVERRIDE_DATA_PATH`.
+- **`LAKEHOUSE_DATA_PATH` puts the Parquet in an S3-compatible bucket and
+  outranks `LAKEHOUSE_DIR`.** The catalog stays local, `just where` prints the
+  data path, and every connection needs the S3 secret, spelled in three places
+  ([`docs/WAREHOUSE.md`](docs/WAREHOUSE.md#the-parquet-in-an-s3-compatible-bucket)).
 - **`data/lakehouse/` is the only copy of every landing table**, so `just clean`
   never takes it, and `analytics.pipeline_runs` is appended rather than rebuilt.
 
@@ -200,9 +204,9 @@ Two tiers, and the split is the point — see [`tests/README.md`](tests/README.m
   and opens an issue — the signal that the fixtures have drifted.
 
 - **A fixture run leaks through any state it does not override** —
-  `WAREHOUSE_PATH`, `LAKEHOUSE_DIR` and dbt's artifact paths. The fixture run
-  passes either way; the *next* command against the real warehouse is the one
-  that is wrong.
+  `WAREHOUSE_PATH`, `LAKEHOUSE_DIR` (and `LAKEHOUSE_DATA_PATH`, when set) and
+  dbt's artifact paths. The fixture run passes either way; the *next* command
+  against the real warehouse is the one that is wrong.
 - **A recorded fixture can be ignored by git and pass everywhere but CI.**
   `.gitignore` excepts `tests/fixtures/ingest/*.csv` from its `*.csv` rule, and
   `dbt/tests/fixtures/*.csv` for when this project grows dbt unit tests. A new

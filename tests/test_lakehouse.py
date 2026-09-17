@@ -15,6 +15,11 @@ The failure that matters is not an exception. Drop a column from the ignore list
 and the diff returns *every* row as revised — a plausible number, in the right
 shape, that reads as a catastrophic upstream restatement. So the tests here
 assert the zero as hard as they assert the one.
+
+The last section guards the landing zone with its Parquet in an S3-compatible
+bucket, where every failure is quiet in a different way: a wrong spelling of the
+endpoint is a 403 that reads as a wrong key, and a connection with no secret
+sends the access key id to AWS.
 """
 
 from __future__ import annotations
@@ -172,3 +177,157 @@ def test_the_attach_alias_is_the_database_dbt_declares():
     profile = yaml.safe_load(Path("dbt/profiles.yml").read_text())
     attached = profile["my_warehouse"]["outputs"]["dev"]["attach"]
     assert [a["alias"] for a in attached] == [lakehouse.ATTACH_ALIAS]
+
+
+# --------------------------------------------------------------------------- #
+# The Parquet in a bucket — LAKEHOUSE_DATA_PATH
+# --------------------------------------------------------------------------- #
+
+BUCKET = "s3://lake/prefix/"
+
+
+@pytest.fixture
+def bucket(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The variables a `.env` set up for S3 holds. `tests/conftest.py` clears the
+    data path for every other test; this puts it back.
+
+    The endpoint carries a trailing slash on purpose: DuckDB then requests
+    `http://host:8333//lake/…`, the signed path no longer matches, and SeaweedFS
+    answers the write and the read with 403 Forbidden (measured 2026-09-17). So
+    every spelling of the secret has to strip it, and these tests only see that
+    if the input has one.
+    """
+    monkeypatch.setenv(lakehouse.DATA_PATH_ENV_VAR, BUCKET)
+    monkeypatch.setenv(lakehouse.S3_ENDPOINT_ENV_VAR, "http://127.0.0.1:8333/")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testtest")
+    monkeypatch.delenv("AWS_REGION", raising=False)
+
+
+def _secrets(con) -> list[dict[str, str]]:
+    """`duckdb_secrets()` as dicts, parsed from its redacted `secret_string`."""
+    return [
+        dict(part.split("=", 1) for part in row[0].split(";"))
+        for row in con.execute("select secret_string from duckdb_secrets()").fetchall()
+    ]
+
+
+def test_a_bucket_data_path_reaches_the_catalog_as_the_string_it_was_given(tmp_path, bucket):
+    """`Path("s3://lake/prefix/")` is `s3:/lake/prefix`, and DuckLake compares the
+    stored data path as a string — so a URL that passed through `Path` anywhere
+    between the variable and the ATTACH is a catalog dbt then refuses to open,
+    since the profile hands DuckLake the variable verbatim.
+
+    Attaching an `s3://` data path writes nothing to the bucket, so this runs
+    offline."""
+    assert lakehouse.data_path(tmp_path) == BUCKET
+
+    con = duckdb.connect()
+    try:
+        attach(
+            con,
+            lakehouse.catalog_path(tmp_path),
+            lakehouse.data_path(tmp_path),
+            alias="lakehouse",
+            storage_secret=lakehouse.storage_secret(),
+        )
+        stored = con.execute(
+            "select value from __ducklake_metadata_lakehouse.ducklake_metadata "
+            "where key = 'data_path'"
+        ).fetchone()
+    finally:
+        con.close()
+    assert stored == (BUCKET,)
+
+
+def test_every_reader_connection_carries_a_secret_scoped_to_the_bucket(tmp_path, bucket):
+    """DuckDB reads no S3 endpoint from the environment, so a connection without
+    this secret sends its request to AWS — and it *does* read the keys, so the
+    access key id goes with it. `read_only_connection` is what every Python
+    reader of the landing zone opens."""
+    con = duckdb.connect()
+    attach(con, lakehouse.catalog_path(tmp_path), BUCKET, alias="lakehouse")
+    con.close()
+
+    con = lakehouse.read_only_connection(tmp_path)
+    try:
+        secrets = _secrets(con)
+    finally:
+        con.close()
+    assert len(secrets) == 1, "a reader of a bucket lakehouse opened with no S3 secret"
+    assert secrets[0]["scope"] == BUCKET
+    assert secrets[0]["endpoint"] == "127.0.0.1:8333"
+    assert secrets[0]["use_ssl"] == "false"
+    assert secrets[0]["url_style"] == "path"
+
+
+def test_on_disk_a_connection_creates_no_secret(tmp_path):
+    """The other half: unset, the behaviour is exactly the on-disk one."""
+    _write(tmp_path, [LOAD])
+    assert lakehouse.storage_secret() is None
+    con = lakehouse.read_only_connection(tmp_path)
+    try:
+        assert _secrets(con) == []
+    finally:
+        con.close()
+
+
+def test_dlt_is_handed_the_endpoint_without_its_trailing_slash(tmp_path, bucket):
+    """dlt strips only the scheme from `endpoint_url`, so a slash in the variable
+    reached dlt's secret and no other — the 403 in the `bucket` fixture, on the
+    one writer. The URL is rebuilt from `storage_secret()`'s parts instead."""
+    storage = lakehouse.dlt_credentials(tmp_path).storage
+    assert storage.bucket_url == BUCKET
+    assert storage.credentials.endpoint_url == "http://127.0.0.1:8333"
+    assert storage.credentials.s3_url_style == "path"
+    assert not (tmp_path / lakehouse.DATA_DIRNAME).exists(), "made a local data dir for a bucket"
+
+
+def test_the_dbt_profile_spells_the_same_secret_and_data_path(bucket, monkeypatch):
+    """The secret is spelled three times — `storage_secret()`, the dbt profile and
+    `just sql` — and a disagreement is a 403 inside `dbt build` that reads as a
+    wrong key. This renders the profile's Jinja with dbt's `env_var` semantics
+    and holds its spelling to Python's; with the variable unset its data path
+    must fall back to the directory beside the catalog."""
+    import os
+    from pathlib import Path
+
+    import jinja2
+    import yaml
+
+    def render(value: str) -> str:
+        def env_var(name: str, default: str | None = None) -> str:
+            value = os.environ.get(name, default)
+            assert value is not None, f"the profile reads {name} with no default"
+            return value
+
+        return jinja2.Template(value).render(env_var=env_var)
+
+    profile = yaml.safe_load(Path("dbt/profiles.yml").read_text())
+    output = profile["my_warehouse"]["outputs"]["dev"]
+    (secret,) = output["secrets"]
+    rendered = {key: render(str(value)) for key, value in secret.items()}
+    python = lakehouse.storage_secret()
+    assert python is not None
+    for key in ("key_id", "secret", "endpoint", "use_ssl", "region"):
+        assert rendered[key] == python[key], f"profile and storage_secret() disagree on {key}"
+    assert rendered["scope"] == BUCKET
+    assert render(output["attach"][0]["options"]["data_path"]) == BUCKET
+
+    monkeypatch.delenv(lakehouse.DATA_PATH_ENV_VAR)
+    monkeypatch.setenv("LAKEHOUSE_DIR", "/abs/lakehouse")
+    assert render(output["attach"][0]["options"]["data_path"]) == "/abs/lakehouse/data/"
+
+
+def test_a_bucket_with_a_setting_missing_is_refused_by_name(tmp_path, bucket, monkeypatch):
+    """Unrefused, a missing key reaches DuckDB as the text `None` and comes back
+    as a 403 — the same symptom as a wrong key, naming neither. A data path that
+    is not `s3://` is refused too: the variable only ever moves the Parquet to a
+    bucket, and a local path belongs in `LAKEHOUSE_DIR`."""
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY")
+    with pytest.raises(RuntimeError, match="AWS_SECRET_ACCESS_KEY"):
+        lakehouse.storage_secret()
+
+    monkeypatch.setenv(lakehouse.DATA_PATH_ENV_VAR, str(tmp_path / "data"))
+    with pytest.raises(ValueError, match="not an s3:// URL"):
+        lakehouse.data_path(tmp_path)
