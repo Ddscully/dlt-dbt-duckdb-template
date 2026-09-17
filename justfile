@@ -7,7 +7,10 @@
 set dotenv-load := true
 
 # Dagster run/event storage (gitignored except dagster.yaml). `env(...)` so a
-# caller's value wins — `.github/actions/setup` sets it in CI.
+# caller's value wins — `.github/actions/setup` sets it in CI. A directory
+# without dagster.yaml falls back to Dagster's defaults, ten runs at once against
+# a file DuckDB lets one process write among them; a symlink to the checked-in
+# file works.
 export DAGSTER_HOME := env("DAGSTER_HOME", justfile_directory() / ".dagster")
 
 # Absolute on purpose. DuckLake records the catalog's `data_path` as given and

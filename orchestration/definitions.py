@@ -9,11 +9,14 @@ Everything `just run` does, as one asset graph, plus the Evidence site. Two jobs
 
 `full_refresh` is defined by *exclusion* (`AssetSelection.all() - site`), so a
 new asset joins it automatically. Two things have to be excluded by hand: a
-second asset that needs Node, and a **partitioned** one — `define_asset_job`
-resolves a selection to a single `partitions_def` or raises, so a monthly and a
-yearly asset cannot share a job. That is when a project grows a third job, and
-it is named for the load rather than the op, because jobs and ops share a
-namespace.
+second asset that needs Node, and a **partitioned** one. A job takes its
+partitions definition from its assets, so one partitioned asset partitions the
+whole job with nothing raised, and a partitioned job's Materialize button in the
+UI launches a backfill of every partition — its dialog has no "no partition"
+choice. `tests/test_definitions.py` fails on that. It is when a project grows a
+third job, named for the load rather than the op, because jobs and ops share a
+namespace; and it is worth doing only where every partition together is a
+routine-sized run (`ingest/pipeline.py`).
 """
 
 from __future__ import annotations
@@ -47,7 +50,11 @@ daily_schedule = dg.ScheduleDefinition(
     cron_schedule="0 6 * * *",
     execution_timezone="UTC",
     # Off by default: this is a demo repo, and `dagster dev` shouldn't start
-    # hitting public APIs on a timer just because someone opened the UI.
+    # hitting public APIs on a timer just because someone opened the UI. Once
+    # started, a daemon that was down at 06:00 UTC launches that tick's run as
+    # soon as it comes back (the latest missed tick only), so a Materialize click
+    # just after `just dagster` starts is the case `.dagster/dagster.yaml`'s
+    # one-run queue exists for.
     default_status=dg.DefaultScheduleStatus.STOPPED,
 )
 

@@ -138,7 +138,7 @@ def test_the_jobs_between_them_cover_every_asset():
     """Registered is not the same as reachable, and the second one is what runs.
 
     An asset excluded from `full_refresh` — because it needs Node, or because it
-    is partitioned differently — has to be paid for by another job rather than
+    is partitioned (below) — has to be paid for by another job rather than
     dropped. Anything in no job is built by no workflow, and nothing else says
     so: `dagster definitions validate` passes on it.
     """
@@ -152,6 +152,30 @@ def test_the_jobs_between_them_cover_every_asset():
         f"unreachable: {sorted(k.to_user_string() for k in defined - covered)}"
     )
     assert assets.EVIDENCE_SITE in _job_keys("publish_site")
+
+
+def test_the_routine_jobs_are_not_partitioned():
+    """A partitioned job's Materialize button in the Dagster UI launches a
+    backfill, and its dialog has no "no partition" choice: only the Launchpad
+    runs the job plain.
+
+    A job takes its partitions definition from its assets, so one partitioned
+    asset joining these selections brings that on with nothing else red — the
+    selection raises nothing and `dagster definitions validate` passes. In the
+    repo this template was cut from, yearly partitions on two API sources made
+    the button a load of every year since 1960, cancelled after ten minutes,
+    where the same job from the Launchpad finished in 1m38s (2026-09-13).
+    """
+    from orchestration.definitions import defs
+
+    for name in ("full_refresh", "publish_site"):
+        partitions = defs.resolve_job_def(name).partitions_def
+        assert partitions is None, (
+            f"`{name}` is partitioned ({type(partitions).__name__}), so its Materialize "
+            "button in the Dagster UI is a backfill of every partition. Give the "
+            "partitioned asset a job of its own and subtract it from this selection, "
+            "or take its backfill window as run config (ingest/pipeline.py says when)."
+        )
 
 
 def test_the_dbt_build_writes_its_run_results_where_the_reader_looks():
