@@ -41,6 +41,19 @@ so a narrowed upstream column is masked), but applied to a merge resource it
 would drop the table *and its watermark*. So the replace group runs with
 `refresh` and the merge group without.
 
+**A backfill window is run config, not a partition, unless every partition
+together is a routine load.** A partitioned asset partitions any job that
+selects it, and a partitioned job's Materialize button in the Dagster UI is a
+backfill of every partition, with no "no partition" choice —
+`test_the_routine_jobs_are_not_partitioned` fails on it. So a source that loads
+a rolling lookback routinely and a year or date range on demand gets a
+`dg.Config` on its op, unset meaning the lookback, and stays in `full_refresh`.
+Only a source like the months of one static file, where every partition costs
+one fetch, belongs in `PARTITIONED_RESOURCES`, with a job of its own. A recipe
+that passes the range with `dagster asset materialize --config-json` needs a
+test holding the op name it spells: given a name it does not know, the command
+ignores the config, loads the default window and exits 0 (measured on 1.13.22).
+
 ## 2. The landing table — `dbt/models/staging/_sources.yml`
 
 Add a `- name:` under the `raw` source, with a description. The name must be the

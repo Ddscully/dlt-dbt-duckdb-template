@@ -36,7 +36,13 @@ FULL_REFRESH_RESOURCES: tuple[str, ...] = ("gold_prices_monthly",)
 INCREMENTAL_RESOURCES: tuple[str, ...] = ()
 
 # Which resources the orchestration layer partitions — a different question from
-# which merge.
+# which merge. Partition a resource only where materializing *every* partition
+# is a routine-sized run, such as the months of one static file: a partitioned
+# asset partitions any job that selects it, and a partitioned job's Materialize
+# button in the Dagster UI is a backfill of every partition. A resource whose
+# routine load is a rolling window (an API's revision lookback) and whose
+# backfill is a year or date range takes the range as op run config instead,
+# unset meaning the routine window, and stays in `full_refresh`.
 PARTITIONED_RESOURCES: tuple[str, ...] = ()
 
 

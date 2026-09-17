@@ -182,7 +182,12 @@ and `transform` stay independently runnable.
 - **Asset keys are the join between the layers.** Rename a dbt source table
   without renaming the dlt resource and the graph silently splits in two — both
   halves still run.
-- **Everything runs in one process**, because DuckDB takes one writer at a time.
+- **Everything runs in one process, and one run at a time**, because DuckDB
+  takes one writer at a time: `.dagster/dagster.yaml` queues what the UI and the
+  schedule launch, but every `just materialize*` recipe runs outside that queue.
+- **A partitioned asset makes its job's Materialize button a backfill** of every
+  partition, so partition only where all of them together are a routine run;
+  otherwise take the backfill window as run config (`ingest/pipeline.py`).
 - **Every asset and check is listed by hand in `definitions.py`**, and an
   omission is silent — `dagster definitions validate` passes.
 - **`orchestration/assets.py` must not use `from __future__ import annotations`**:
