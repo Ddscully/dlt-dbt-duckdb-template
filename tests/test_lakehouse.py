@@ -24,6 +24,8 @@ sends the access key id to AWS.
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import duckdb
 import pytest
 
@@ -238,6 +240,39 @@ def test_a_bucket_data_path_reaches_the_catalog_as_the_string_it_was_given(tmp_p
     finally:
         con.close()
     assert stored == (BUCKET,)
+
+
+def test_a_bucket_connection_installs_httpfs_before_loading_it(tmp_path, bucket):
+    """The S3 secret needs httpfs, and a bare `load httpfs` fails on a machine
+    that has never downloaded it: `Extension "httpfs" … not found`. This
+    template's CI hit exactly that on the branch that added bucket support
+    (2026-09-17).
+
+    Any machine that has run dbt has httpfs, because the profile lists it, so a
+    real attach cannot fail locally, and making a machine without it means a
+    download inside a unit test. So this spies on a real connection and holds
+    the order of the statements `attach` sends. Attaching an `s3://` data path
+    writes nothing to the bucket, so the attach itself runs offline.
+    """
+    con = duckdb.connect()
+    spy = MagicMock(wraps=con)
+    try:
+        attach(
+            spy,
+            lakehouse.catalog_path(tmp_path),
+            lakehouse.data_path(tmp_path),
+            alias="lakehouse",
+            storage_secret=lakehouse.storage_secret(),
+        )
+    finally:
+        con.close()
+
+    statements = [call.args[0].strip().lower() for call in spy.execute.call_args_list]
+    assert "load httpfs" in statements, "a bucket attach no longer loads httpfs at all"
+    loaded = statements.index("load httpfs")
+    assert "install httpfs" in statements[:loaded], (
+        "httpfs is loaded without being installed first, which fails on a fresh machine"
+    )
 
 
 def test_every_reader_connection_carries_a_secret_scoped_to_the_bucket(tmp_path, bucket):
