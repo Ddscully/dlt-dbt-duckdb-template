@@ -37,6 +37,17 @@ DuckDB takes a single writer per file, across processes. So:
 Two readers are fine. Close the CLI before building; if a command reports the
 file is locked, look for your own shell first.
 
+**Inside one process the rule is different — and it is still not "a writer plus
+readers".** DuckDB caches one instance per file and `read_only` is part of its
+configuration, so a second `connect()` asking for the *other* mode fails in both
+orders with `Can't open a connection to same database file with a different
+configuration than existing connections`. That is a configuration error, with no
+lock and no PID to go hunting for. A second connection in the *same* mode shares
+the cached instance and works, and MVCC gives a reader a consistent snapshot
+while a write is in flight. So read-only is a property of the instance, not a
+privilege on a connection: there is no restricted handle onto a writable
+warehouse to hand a caller, which is why every reader here opens its own.
+
 Mid-build, the one read that works is the lakehouse:
 `lake.lakehouse.read_only_connection()` attaches the catalog read-only, and dbt
 holds the *warehouse* file, not that one.
