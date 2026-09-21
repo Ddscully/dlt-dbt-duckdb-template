@@ -87,6 +87,7 @@ its own lists them all.
 | `just materialize-site` | the same, plus the Evidence site (needs Node) |
 | `just materialize-preview '<sel>'` | what a selection resolves to, materializing nothing — zero matches still exits 0 |
 | `just dagster` | Dagster UI on :3000 |
+| `just validate` | does the code location load, and is every definition registered |
 | `just test` / `just test-pipeline` | mocked unit tests; the whole pipeline against fixtures |
 | `just lint` / `just typecheck` | sqlfluff over the dbt models; ty, gating nothing |
 | `just report` / `just report-clean` | build the Evidence site (`--clean` drops the schema cache) |
@@ -189,7 +190,21 @@ and `transform` stay independently runnable.
   partition, so partition only where all of them together are a routine run;
   otherwise take the backfill window as run config (`ingest/pipeline.py`).
 - **Every asset and check is listed by hand in `definitions.py`**, and an
-  omission is silent — `dagster definitions validate` passes.
+  omission is silent — `just validate` passes.
+- **Every Dagster CLI command here is `@superseded`**, so each prints one line
+  before it works: `dagster dev` names `dg dev`, `job execute` and `asset
+  materialize` name `dg launch`, `definitions validate` names `dg check defs`. A
+  supersession carries no `breaking_version` — only `@deprecated` does, and on
+  `dagster dev` it is applied to the `--dagit-*` arguments, not the command. The
+  replacements need the `tool.dg.directory_type` project declaration this tree
+  does not have, so the warning is a nag on a supported path, not a clock.
+- **`-m` is required by some CLI commands and wrong for others.** `dagster asset
+  list` (behind `just materialize-preview`) takes a module pointer and nothing
+  else, and fails without one; `job list` and `definitions validate` fall back to
+  `[tool.dagster]`; `run list` and `schedule list` read `DAGSTER_HOME` instead.
+  Against a *running* `just dagster`, never pass `-m`: it names the code location
+  after the module, so a `schedule start` flips a row the daemon does not read
+  and a `job launch` fails the run it just returned 0 for.
 - **`orchestration/assets.py` must not use `from __future__ import annotations`**:
   Dagster inspects the `context` parameter's annotation object.
 - **The site is its own job** (`publish_site`), because it shells out to npm and

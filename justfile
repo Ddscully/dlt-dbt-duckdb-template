@@ -175,6 +175,8 @@ bus-matrix:
 record-fixtures:
     uv run python -m scripts.record_fixtures
 
+# Prints a SupersessionWarning naming `dg dev`. Every Dagster CLI command here
+# carries one, and none is on a removal clock (AGENTS.md's orchestration section).
 # Dagster UI on :3000 — asset graph, run history, freshness, checks
 dagster:
     mkdir -p "$DAGSTER_HOME"
@@ -205,6 +207,13 @@ materialize-select selection: where dbt-parse
 materialize-preview selection: dbt-parse
     uv run --group orchestration dagster asset list \
         -m orchestration.definitions --select '{{ selection }}'
+
+# `dbt-parse` first: the code location imports the dbt project, so without a
+# manifest it fails to load rather than reporting what is unregistered. No `-m`,
+# which leaves the location named as `[tool.dagster]` names it.
+# Check the code location loads and every definition is registered
+validate: dbt-parse
+    uv run --group orchestration dagster definitions validate
 
 # Read-only unless `write`, so a session cannot change anything by accident.
 # Either mode blocks a build while it is open: DuckDB allows one writer or many
