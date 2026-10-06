@@ -114,6 +114,14 @@ dbt-docs-serve: dbt-docs
 lakehouse:
     uv run python -m lake.lakehouse
 
+# Counted in loads of `lake.lakehouse.HISTORY_TABLE`, not days, so an idle
+# catalog keeps its diffable pair. `just run` and `full_refresh` both end with
+# it. `keep` defaults to `KEEP_LOADS`, so the constant is the one place the
+# number lives.
+# Expire lakehouse snapshots before the last `keep` loads, and their files
+lakehouse-expire keep="": where
+    uv run python -m lake.lakehouse --expire {{ keep }}
+
 # Polars derived metrics
 transform: where
     uv run python -m transform.gold_price_trend
@@ -124,7 +132,7 @@ pipeline-status: where
     uv run python -m transform.pipeline_status
 
 # Full pipeline via shell ordering (see `just materialize` for the graph-aware one)
-run: ingest dbt-build transform pipeline-status
+run: ingest dbt-build transform pipeline-status lakehouse-expire
 
 # Unit tests — mocked API payloads, no network, no warehouse
 test:
@@ -136,15 +144,17 @@ coverage:
     uv run coverage run -m pytest
     uv run coverage report
 
-# The whole pipeline against checked-in fixtures, into a throwaway warehouse — what CI runs
+# CI runs the same graph through `just materialize` with INGEST_FIXTURES set;
+# this is the shell-ordered version, plus a second load to exercise expiry.
+# The whole pipeline against checked-in fixtures, into a throwaway warehouse
 test-pipeline: _no-dbt-dotenv
     #!/usr/bin/env bash
     set -euo pipefail
     export INGEST_FIXTURES=1
     # Every piece of state the next real command reads is redirected, or the
-    # fixture run leaks into it: the warehouse, the landing zone (which holds
-    # the weather archive no rebuild can afford), and dbt's artifacts (which
-    # `pipeline-status` files into `analytics.pipeline_runs`).
+    # fixture run leaks into it: the warehouse, the landing zone (the only copy
+    # of every landing table), and dbt's artifacts (which `pipeline-status`
+    # files into `analytics.pipeline_runs`).
     export WAREHOUSE_PATH="$(mktemp -d)/warehouse.duckdb"
     export LAKEHOUSE_DIR="$(dirname "$WAREHOUSE_PATH")/lakehouse"
     export DBT_TARGET_PATH="$(dirname "$WAREHOUSE_PATH")/dbt-target"
@@ -163,6 +173,12 @@ test-pipeline: _no-dbt-dotenv
     cd dbt && uv run dbt deps && uv run dbt build --target-path "$DBT_TARGET_PATH" && cd ..
     uv run python -m transform.gold_price_trend
     uv run python -m transform.pipeline_status
+    # A second load, so expiry has a snapshot to expire: after one load it
+    # expires nothing, and this run would never call DuckLake's expiry. It goes
+    # in 500-row files, each its own snapshot, and must still count as one load:
+    # the reload is identical, so the pair expiry keeps must diff to nothing.
+    DATA_WRITER__FILE_MAX_ITEMS=500 uv run python -m ingest.pipeline
+    uv run python -c "from lake import lakehouse as lh; freed = lh.expire(); print(freed); assert freed['snapshots'], 'expiry expired no snapshot'; pair = lh.versions(lh.HISTORY_TABLE); assert len(pair) == 2 and not lh.revisions(lh.HISTORY_TABLE, pair[0]), f'expiry kept {pair}, not the last two loads'"
     uv run python -m lake.lakehouse
 
 # Reads dbt/target/manifest.json (`just dbt-parse`), never the warehouse: grains

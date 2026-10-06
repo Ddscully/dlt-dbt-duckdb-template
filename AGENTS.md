@@ -82,7 +82,8 @@ its own lists them all.
 | `just dbt-parse` | write `dbt/target/manifest.json` — the Dagster graph will not load without it |
 | `just transform` | the Polars derived metrics → `analytics` |
 | `just pipeline-status` | load times, layer inventory, dbt test state → `analytics.pipeline_*` |
-| `just run` | ingest → dbt-build → transform → pipeline-status (shell ordering) |
+| `just run` | ingest → dbt-build → transform → pipeline-status → lakehouse-expire (shell ordering) |
+| `just lakehouse` / `just lakehouse-expire` | what the landing zone holds; expire snapshots before the last two loads |
 | `just materialize` | the same pipeline, ordered by the asset graph |
 | `just materialize-site` | the same, plus the Evidence site (needs Node) |
 | `just materialize-preview '<sel>'` | what a selection resolves to, materializing nothing — zero matches still exits 0 |
@@ -153,6 +154,11 @@ everything else into `data/warehouse.duckdb`. The full account is
   ([`docs/WAREHOUSE.md`](docs/WAREHOUSE.md#the-parquet-in-an-s3-compatible-bucket)).
 - **`data/lakehouse/` is the only copy of every landing table**, so `just clean`
   never takes it, and `analytics.pipeline_runs` is appended rather than rebuilt.
+- **A copied catalog still names the original's absolute `data_path`**, so
+  expiring or cleaning the copy deletes the real Parquet. Before any write to a
+  copy, rewrite its one row:
+  `update ducklake_metadata set value = '<copy>/data/' where key = 'data_path'`,
+  run against the copy's `catalog.duckdb` opened as a plain DuckDB file.
 
 ## dbt
 
@@ -218,8 +224,9 @@ Two tiers, and the split is the point — see [`tests/README.md`](tests/README.m
   warehouse.
 - `just test-pipeline` — the real modules end to end with `INGEST_FIXTURES=1`,
   every source served from `tests/fixtures/ingest/`, into a throwaway warehouse
-  and landing zone. This is what CI runs, so a red PR build means the repo broke,
-  not that a publisher was down.
+  and landing zone. CI runs the same fixtures through the asset graph
+  (`just materialize`), so a red PR build means the repo broke, not that a
+  publisher was down.
 - `.github/workflows/nightly.yml` runs the graph against the *live* sources daily
   and opens an issue — the signal that the fixtures have drifted.
 

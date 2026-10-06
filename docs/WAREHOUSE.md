@@ -40,6 +40,20 @@ touches it. Re-making it costs whatever the sources charge to fetch again, which
 for this template is nothing and for a rate-limited or paid API is the whole
 archive.
 
+**Its history is kept two loads deep.** Every `replace` load rewrites its table,
+and the old files stay readable at older snapshots until those expire. `just run`
+and `full_refresh` end by expiring every snapshot before the second-newest load
+of `lake.lakehouse.HISTORY_TABLE` (`just lakehouse-expire`), so the last two loads
+stay a pair `lakehouse.revisions()` can diff. It counts loads rather than days,
+because a catalog left idle for longer than a window of days would lose the pair.
+A load is a row in dlt's `_dlt_loads`, not a snapshot: a `replace` load copies
+its table in a file at a time, so one load can be several snapshots, and `lakehouse.versions()`
+reads each load where its row went in. Expiry runs last, so a load that fails
+the dbt build expires nothing.
+`just lakehouse` prints the bytes the current snapshot reads against the bytes
+the catalog records. Point `HISTORY_TABLE` at whichever landing table's history
+you read; `tests/test_lakehouse.py` fails if it names one no resource loads.
+
 `analytics.pipeline_runs` is the other one: one row per dbt node per invocation,
 appended, because each build overwrites the artifact the previous one was read
 from. Deleting `data/warehouse.duckdb` destroys that history. A project that

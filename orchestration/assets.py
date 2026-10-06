@@ -37,6 +37,7 @@ from ingest.pipeline import (
     load_groups,
     public_indicators,
 )
+from lake.lakehouse import HISTORY_TABLE, KEEP_LOADS, expire as expire_lakehouse
 from modern_data_stack.db import scalar
 from modern_data_stack.paths import dbt_run_results_path, dbt_target_path, warehouse_path
 from orchestration.resources import dbt_project
@@ -232,6 +233,34 @@ def pipeline_status(context: AssetExecutionContext) -> dg.MaterializeResult:
 
 
 # --------------------------------------------------------------------------- #
+# Landing-zone expiry — last
+# --------------------------------------------------------------------------- #
+
+
+@dg.asset(
+    key=dg.AssetKey(["lake", "snapshot_expiry"]),
+    # Last in `full_refresh`, as in `just run`: a step whose upstream failed is
+    # skipped, so a load that breaks the dbt build expires nothing. On the raw
+    # assets alone it ran straight after the load, whatever followed, and two bad
+    # loads in a row expired the last good one out of the only copy.
+    # `tests/test_definitions.py` holds every other asset in the job upstream.
+    deps=[pipeline_status],
+    group_name="raw",
+    kinds={"ducklake"},
+    description=(
+        f"Expires lakehouse snapshots before the last {KEEP_LOADS} loads of "
+        f"`{HISTORY_TABLE}` and deletes the files only they read. Counted in "
+        "loads, not days, so a catalog left idle keeps its diffable pair. Runs "
+        "last, so a failed build upstream expires nothing."
+    ),
+)
+def snapshot_expiry(context: AssetExecutionContext) -> dg.MaterializeResult:
+    freed = expire_lakehouse()
+    context.log.info("expired %(snapshots)s snapshots, %(files)s files, %(orphans)s orphans", freed)
+    return dg.MaterializeResult(metadata=freed)
+
+
+# --------------------------------------------------------------------------- #
 # Layer 4 — the Evidence site
 # --------------------------------------------------------------------------- #
 
@@ -373,4 +402,5 @@ __all__ = [
     "gold_price_trend",
     "pipeline_status",
     "raw_assets",
+    "snapshot_expiry",
 ]

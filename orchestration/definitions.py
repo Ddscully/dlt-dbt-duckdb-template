@@ -66,6 +66,7 @@ defs = dg.Definitions(
         assets.dbt_models,
         assets.gold_price_trend,
         assets.pipeline_status,
+        assets.snapshot_expiry,
         assets.evidence_site,
     ],
     asset_checks=[
