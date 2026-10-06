@@ -71,31 +71,11 @@ src/modern_data_stack/   the domain-neutral mechanisms every layer calls
 
 ## Commands
 
-Use the `justfile` recipes (they map to plain `uv run …` commands); `just` on
-its own lists them all.
-
-| Command | What it does |
-|---|---|
-| `just setup` | `uv sync --group dev --group orchestration`, then `install ducklake` — an extension binary no lockfile can name |
-| `just ingest` | run the dlt pipeline → `raw` in the DuckLake catalog |
-| `just dbt-build` | `dbt deps` then `dbt build` |
-| `just dbt-parse` | write `dbt/target/manifest.json` — the Dagster graph will not load without it |
-| `just transform` | the Polars derived metrics → `analytics` |
-| `just pipeline-status` | load times, layer inventory, dbt test state → `analytics.pipeline_*` |
-| `just run` | ingest → dbt-build → transform → pipeline-status → lakehouse-expire (shell ordering) |
-| `just lakehouse` / `just lakehouse-expire` | what the landing zone holds; expire snapshots before the last two loads |
-| `just materialize` | the same pipeline, ordered by the asset graph |
-| `just materialize-site` | the same, plus the Evidence site (needs Node) |
-| `just materialize-preview '<sel>'` | what a selection resolves to, materializing nothing — zero matches still exits 0 |
-| `just dagster` | Dagster UI on :3000 |
-| `just validate` | does the code location load, and is every definition registered |
-| `just test` / `just test-pipeline` | mocked unit tests; the whole pipeline against fixtures |
-| `just lint` / `just typecheck` | sqlfluff over the dbt models; ty, gating nothing |
-| `just report` / `just report-clean` | build the Evidence site (`--clean` drops the schema cache) |
-| `just where` | which warehouse file and landing zone the recipes will use |
-| `just sql` | the warehouse in the DuckDB CLI with the lakehouse attached, read-only |
-| `just bus-matrix` | regenerate the bus matrix block in `docs/WAREHOUSE.md` |
-| `just clean` | delete the gitignored build output |
+Use the `justfile` recipes; most wrap a plain `uv run …` command. **`just`
+lists them all, grouped by what they are for** — setup, pipeline, inspect,
+check, publish, dagster — with a line each, and the comment block above a recipe
+says why it exists. Start with `just setup` once, then `just run` for the
+pipeline and `just test` for the suite.
 
 Always run tools through `uv run` so they use the project venv, with
 `--group orchestration` for anything that imports Dagster. dbt commands must run
