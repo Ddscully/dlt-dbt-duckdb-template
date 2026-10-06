@@ -23,7 +23,7 @@ DUCKDB_PATH = warehouse_path()
 WINDOW_MONTHS = 12
 
 
-def build_gold_price_trend(df: pl.DataFrame) -> pl.DataFrame:
+def build_gold_price_trend(frame: pl.LazyFrame) -> pl.LazyFrame:
     """The rolling year and the change on a year earlier, per priced month.
 
     **Both windows are computed over the complete `dim_month` spine, and the
@@ -37,8 +37,14 @@ def build_gold_price_trend(df: pl.DataFrame) -> pl.DataFrame:
     A window that overlaps an unpriced month yields null rather than a number
     computed from fewer observations, which is the honest answer and the reason
     this is worth doing in Polars rather than in SQL.
+
+    Lazy in and out, so the caller decides when to collect, and a filter that
+    can run inside the DuckDB scan does. This one cannot, and Polars keeps it
+    where it is written: `shift` and `rolling_mean` depend on row order, so the
+    optimiser pushes no filter past them. `tests/test_transform.py` holds that
+    through the real scan.
     """
-    spine = df.sort("month_start")
+    spine = frame.sort("month_start")
     return spine.with_columns(
         pl.col("price_usd_per_troy_oz")
         .rolling_mean(window_size=WINDOW_MONTHS)
@@ -57,7 +63,8 @@ def run(duckdb_path: str = DUCKDB_PATH) -> int:
     """
     con = duckdb.connect(duckdb_path)
     try:
-        out = build_gold_price_trend(con.sql("select * from marts.fct_gold_price_month").pl())
+        mart = con.sql("select * from marts.fct_gold_price_month").pl(lazy=True)
+        out = build_gold_price_trend(mart).collect()
         db.write_frames(con, {"gold_price_trend": out}, "analytics")
         return out.height
     finally:

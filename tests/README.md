@@ -15,6 +15,7 @@ holding the *plumbing* to the tree:
 | `test_asset_checks.py` | the asset checks' own logic, against throwaway DuckDB files |
 | `test_exposures.py` | that `_exposures.yml` still describes what the Evidence pages read — a stale exposure is invisible, since `dbt build` stays green |
 | `test_report.py` | that the table-to-model maps in `publish/build_report.py` match the SQL the pages actually run |
+| `test_transform.py` | that the Polars windows run over the month spine, through the lazy DuckDB scan, before unpriced months are dropped |
 | `test_additivity.py` | that every numeric mart column declares whether it may be summed |
 | `test_bus_matrix.py` | that the matrix in `docs/WAREHOUSE.md` is what the manifest currently implies |
 | `test_lakehouse.py` | the substitute for DuckLake's change feed, and that the three spellings of the `lakehouse` alias agree |
