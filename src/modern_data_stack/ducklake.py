@@ -1,10 +1,11 @@
-"""Attach a DuckLake catalog, and read what changed between two snapshots.
+"""Attach a DuckLake catalog, read what changed between two snapshots, expire old ones.
 
 DuckLake is a table format: plain Parquet under a data directory, plus a
 catalog database holding schema, snapshot lineage and per-file statistics. This
-module is the domain-neutral half — attaching one, listing its snapshots, and
-diffing a table across two of them. What lives in the lakehouse, and where it
-sits, is `lake/lakehouse.py`.
+module is the domain-neutral half — attaching one, listing its snapshots,
+diffing a table across two of them, and expiring the snapshots nothing needs.
+What lives in the lakehouse, where it sits and what it keeps is
+`lake/lakehouse.py`.
 
 ## Why the diff is here rather than `ducklake_table_changes()`
 
@@ -34,9 +35,13 @@ from .db import scalar
 
 __all__ = [
     "attach",
+    "expire",
     "revisions",
     "row_count",
     "snapshots",
+    "sql_identifier",
+    "sql_literal",
+    "storage",
     "table_versions",
 ]
 
@@ -91,22 +96,24 @@ def attach(
         # No bind parameters here either, so the values are quoted literals.
         con.execute(
             f"create or replace secret {alias}_storage (type s3, "
-            f"key_id {_quoted(storage_secret['key_id'])}, "
-            f"secret {_quoted(storage_secret['secret'])}, "
-            f"endpoint {_quoted(storage_secret['endpoint'])}, use_ssl {use_ssl}, "
-            f"region {_quoted(storage_secret['region'])}, url_style 'path', "
-            f"scope {_quoted(data_path_sql)})"
+            f"key_id {sql_literal(storage_secret['key_id'])}, "
+            f"secret {sql_literal(storage_secret['secret'])}, "
+            f"endpoint {sql_literal(storage_secret['endpoint'])}, use_ssl {use_ssl}, "
+            f"region {sql_literal(storage_secret['region'])}, url_style 'path', "
+            f"scope {sql_literal(data_path_sql)})"
         )
 
-    options = [f"data_path '{data_path_sql}'"]
+    options = [f"data_path {sql_literal(data_path_sql)}"]
     if read_only:
         options.append("read_only")
     if data_inlining_row_limit is not None:
         options.append(f"data_inlining_row_limit {int(data_inlining_row_limit)}")
 
     # ATTACH takes literals, not bind parameters — `attach $path` is a parser
-    # error — so the paths are interpolated rather than bound as parameters.
-    con.execute(f"attach 'ducklake:duckdb:{Path(catalog_path)}' as {alias} ({', '.join(options)})")
+    # error — so the paths are quoted literals, which a `'` in a directory name
+    # would otherwise end early.
+    catalog_sql = sql_literal(f"ducklake:duckdb:{Path(catalog_path)}")
+    con.execute(f"attach {catalog_sql} as {alias} ({', '.join(options)})")
 
 
 def snapshots(con: duckdb.DuckDBPyConnection, alias: str) -> list[int]:
@@ -121,7 +128,10 @@ def table_versions(con: duckdb.DuckDBPyConnection, alias: str, table: str) -> li
 
     A dlt load writes several snapshots (staging, merge, cleanup), so most say
     nothing about a given table; this is what makes "the previous version" mean
-    the previous version of *this* table.
+    the previous version of *this* table. **They are writes, not loads**: a
+    writer can fill one table across several snapshots, and every one but its
+    last is a partial state. Grouping them into loads takes the writer's own
+    record of where a load ended, which is the caller's (`lake.lakehouse`).
     """
     schema, name = _split(table)
     meta = meta_alias(alias)
@@ -150,10 +160,19 @@ def table_versions(con: duckdb.DuckDBPyConnection, alias: str, table: str) -> li
     inlined = con.execute(
         f"select table_name from {meta}.ducklake_inlined_data_tables where table_id in ({id_list})"
     ).fetchall()
-    sources += [f'select begin_snapshot from {meta}."{row[0]}"' for row in inlined]
+    sources += [f"select begin_snapshot from {meta}.{sql_identifier(row[0])}" for row in inlined]
 
+    # A live file can begin at an expired snapshot; the change is readable from
+    # the next surviving one. Dropping the id would end the list a change early.
     rows = con.execute(
-        f"select distinct begin_snapshot from ({' union all '.join(sources)}) order by 1"
+        f"""
+        select distinct (
+            select min(s.snapshot_id) from {meta}.ducklake_snapshot s
+            where s.snapshot_id >= v.begin_snapshot
+        ) as version
+        from ({" union all ".join(sources)}) v
+        order by 1
+        """
     ).fetchall()
     return [row[0] for row in rows]
 
@@ -186,9 +205,70 @@ def revisions(
     ).fetchall()
 
 
-def _quoted(value: str) -> str:
-    """A SQL string literal, for the statements that take no bind parameters."""
+def expire(
+    con: duckdb.DuckDBPyConnection,
+    alias: str,
+    before: int | None,
+    delete_orphans: bool,
+    orphan_grace: str = "1 day",
+) -> dict[str, int]:
+    """Expire every snapshot older than `before`, then delete the files only they read.
+
+    `before` survives, so a diff from it still reads; None expires nothing but
+    still deletes files that earlier expiries left. Orphans are Parquet the
+    catalog never recorded, such as a crashed load's; `delete_orphans` lists the
+    whole data path, so pass it only for a path this catalog owns outright, and
+    `orphan_grace` spares a write still in flight.
+    """
+    expired = [] if before is None else [s for s in snapshots(con, alias) if s < before]
+    if expired:
+        ids = ", ".join(str(int(i)) for i in expired)
+        con.execute(f"call ducklake_expire_snapshots({sql_literal(alias)}, versions => [{ids}])")
+    cleaned = con.execute(
+        f"call ducklake_cleanup_old_files({sql_literal(alias)}, cleanup_all => true)"
+    ).fetchall()
+    orphans = []
+    if delete_orphans:
+        orphans = con.execute(
+            f"call ducklake_delete_orphaned_files({sql_literal(alias)}, "
+            f"older_than => now() - interval {sql_literal(orphan_grace)})"
+        ).fetchall()
+    return {"snapshots": len(expired), "files": len(cleaned), "orphans": len(orphans)}
+
+
+def storage(con: duckdb.DuckDBPyConnection, alias: str) -> dict[str, int]:
+    """Bytes of the files the catalog records, and of those the current snapshot reads.
+
+    The difference is what `expire` can free. Orphans are not recorded, so not counted.
+    """
+    meta = meta_alias(alias)
+    total, live = con.execute(
+        f"""
+        select coalesce(sum(file_size_bytes), 0),
+               coalesce(sum(file_size_bytes) filter (where end_snapshot is null), 0)
+        from (
+            select file_size_bytes, end_snapshot from {meta}.ducklake_data_file
+            union all
+            select file_size_bytes, end_snapshot from {meta}.ducklake_delete_file
+        )
+        """
+    ).fetchall()[0]
+    return {"bytes": int(total), "live_bytes": int(live)}
+
+
+def sql_literal(value: str | Path) -> str:
+    """A SQL string literal, for the statements that take no bind parameters.
+
+    Public so that every ATTACH or `call` built around a path or a name quotes it
+    the same way: a value quoted in one place and interpolated raw in another is
+    the bug a second copy of these two lines produces.
+    """
     return "'" + str(value).replace("'", "''") + "'"
+
+
+def sql_identifier(name: str) -> str:
+    """A quoted SQL identifier, for names read out of the catalog rather than typed."""
+    return '"' + str(name).replace('"', '""') + '"'
 
 
 def _split(table: str) -> tuple[str, str]:

@@ -30,37 +30,53 @@ import duckdb
 import pytest
 
 from lake import lakehouse
-from modern_data_stack.ducklake import attach, revisions, table_versions
+from modern_data_stack.ducklake import attach, revisions, row_count, table_versions
 
-TABLE = "raw.gold_prices_monthly"
+# The table expiry counts loads of, so the expiry tests below exercise the
+# constant rather than a copy of it.
+TABLE = lakehouse.HISTORY_TABLE
 
 # Two months. Small enough to read, and two rows is the minimum that can
 # distinguish "one row changed" from "everything changed".
 LOAD = [("2021-11", "2021-11-01", 1_820.0), ("2021-12", "2021-12-01", 1_795.0)]
 
 
-def _write(lake_dir, loads: list[list[tuple]]) -> None:
-    """Write the landing table once per entry in `loads`.
+def _write(lake_dir, loads: list[list[tuple]], snapshots_per_load: int = 1) -> None:
+    """Write the landing table once per entry in `loads`, and record each load.
 
     Every write stamps fresh `_dlt_load_id`/`_dlt_id` values, which is what dlt
     does on every merge and the whole reason the diff has to ignore them. Plain
     SQL rather than a dlt run: what is under test is the diff, and a loader in
     the loop would make these tests about dlt's merge instead.
+
+    What these keep of dlt is where a load ends: its rows go in over
+    `snapshots_per_load` inserts, as a dlt `replace` load copies it in a file at
+    a time, and then its row goes into `_dlt_loads`, as dlt's last step does.
     """
     (lake_dir / "data").mkdir(parents=True, exist_ok=True)
     con = duckdb.connect()
     attach(con, lake_dir / "catalog.duckdb", lake_dir / "data", alias="lakehouse")
     con.execute("create schema if not exists lakehouse.raw")
     try:
+        con.execute(
+            f"create table if not exists lakehouse.raw.{lakehouse.DLT_LOADS_TABLE} "
+            "(load_id varchar, status bigint)"
+        )
         for n, rows in enumerate(loads):
-            values = ", ".join(
-                f"('{label}', date '{day}', {price}, 'load_{n}', 'id_{n}_{i}')"
-                for i, (label, day, price) in enumerate(rows)
-            )
             con.execute(f"drop table if exists lakehouse.{TABLE}")
             con.execute(
-                f"create table lakehouse.{TABLE} as select * from (values {values}) as t"
-                "(date, month_start, price, _dlt_load_id, _dlt_id)"
+                f"create table lakehouse.{TABLE} (date varchar, month_start date, "
+                "price double, _dlt_load_id varchar, _dlt_id varchar)"
+            )
+            size = -(-len(rows) // snapshots_per_load)
+            for start in range(0, len(rows), size):
+                values = ", ".join(
+                    f"('{label}', date '{day}', {price}, 'load_{n}', 'id_{n}_{i}')"
+                    for i, (label, day, price) in enumerate(rows[start : start + size], start)
+                )
+                con.execute(f"insert into lakehouse.{TABLE} values {values}")
+            con.execute(
+                f"insert into lakehouse.raw.{lakehouse.DLT_LOADS_TABLE} values ('load_{n}', 0)"
             )
     finally:
         con.close()
@@ -162,6 +178,241 @@ def test_an_unqualified_table_name_is_refused(tmp_path):
             revisions(con, "lakehouse", "gold_prices_monthly", 0, None, ignore=())
     finally:
         con.close()
+
+
+def test_a_lakehouse_directory_with_a_quote_in_its_name_attaches(tmp_path):
+    """ATTACH takes no bind parameters, so the paths are SQL literals, and a `'`
+    in a directory name ends an unescaped one early: a parser error naming the
+    rest of the path, from a project that merely lives under `~/Bob's work/`."""
+    lake = tmp_path / "it's"
+    _write(lake, [LOAD])
+    con = _connect(lake)
+    try:
+        assert row_count(con, "lakehouse", TABLE) == len(LOAD)
+    finally:
+        con.close()
+
+
+# --------------------------------------------------------------------------- #
+# Expiry
+# --------------------------------------------------------------------------- #
+
+# Over DuckLake's inlining limit (10 rows) even written in two halves, so each
+# load writes Parquet that expiry can delete.
+BIG_LOAD = [
+    (f"{2020 + i // 12}-{i % 12 + 1:02d}", f"{2020 + i // 12}-{i % 12 + 1:02d}-01", 1_500.0 + i)
+    for i in range(24)
+]
+
+
+def _parquet(lake_dir) -> set:
+    return set((lake_dir / "data").rglob("*.parquet"))
+
+
+def test_the_history_table_is_a_landing_table():
+    """Expiry counts loads of `HISTORY_TABLE`. A name that is not a landing
+    table has no loads, so nothing would ever expire and nothing would say so:
+    the catalog grows by a full rewrite per `replace` load, for good."""
+    from ingest import pipeline
+
+    schema, name = lakehouse.HISTORY_TABLE.split(".")
+    assert schema == pipeline.PIPELINE_DATASET
+    assert name in (*pipeline.FULL_REFRESH_RESOURCES, *pipeline.INCREMENTAL_RESOURCES), (
+        f"lake.lakehouse.HISTORY_TABLE names {name!r}, which no dlt resource loads; "
+        "point it at the landing table whose history you read"
+    )
+
+
+def test_a_version_whose_snapshot_expired_is_read_at_the_next_surviving_one(tmp_path):
+    """Expiry removes snapshots, not live files, so a live file can begin at a
+    snapshot that no longer exists. Handed that id, `revisions()` fails with
+    `No snapshot found at version N`. Dropping the id instead would end the list
+    at the previous change and diff the wrong pair, silently.
+    """
+    _write(tmp_path, [LOAD, [("2021-11", "2021-11-01", 1_806.5), *LOAD[1:]]])
+    con = duckdb.connect()
+    attach(con, tmp_path / "catalog.duckdb", tmp_path / "data", alias="lakehouse")
+    try:
+        restated = table_versions(con, "lakehouse", TABLE)[-1]
+        # A later snapshot, so the one to expire is not the newest.
+        con.execute("create table lakehouse.raw.unrelated as select 1 as x")
+        con.execute(f"call ducklake_expire_snapshots('lakehouse', versions => [{restated}])")
+
+        versions = table_versions(con, "lakehouse", TABLE)
+        live = {
+            row[0]
+            for row in con.execute("select snapshot_id from lakehouse.snapshots()").fetchall()
+        }
+        changed = revisions(
+            con, "lakehouse", TABLE, versions[-2], versions[-1], ignore=lakehouse.DLT_COLUMNS
+        )
+    finally:
+        con.close()
+    assert set(versions) <= live
+    assert versions[-1] > restated
+    assert [(row[0], row[2]) for row in changed] == [("2021-11", 1_806.5)]
+
+
+def test_expiry_keeps_the_last_two_loads_as_a_pair_and_every_current_row(tmp_path):
+    """Expiry deletes files from the only copy of the landing table, so what
+    must survive is asserted whole: the current rows, and the last two loads as
+    a diffable pair."""
+    restated = [("2020-01", "2020-01-01", 1_234.5), *BIG_LOAD[1:]]
+    _write(tmp_path, [BIG_LOAD, BIG_LOAD, restated])
+    con = _connect(tmp_path)
+    try:
+        current = sorted(con.execute(f"select * from lakehouse.{TABLE}").fetchall())
+    finally:
+        con.close()
+    files = _parquet(tmp_path)
+
+    freed = lakehouse.expire(keep=2, lakehouse_dir=tmp_path)
+
+    con = _connect(tmp_path)
+    try:
+        assert sorted(con.execute(f"select * from lakehouse.{TABLE}").fetchall()) == current
+        versions = table_versions(con, "lakehouse", TABLE)
+        changed = revisions(
+            con, "lakehouse", TABLE, versions[-2], versions[-1], ignore=lakehouse.DLT_COLUMNS
+        )
+    finally:
+        con.close()
+    assert len(versions) == 2
+    assert [(row[0], row[2]) for row in changed] == [("2020-01", 1_234.5)]
+    assert freed["snapshots"] > 0
+    assert _parquet(tmp_path) < files
+    # Nothing older is left to expire, so a second run is a no-op.
+    assert lakehouse.expire(keep=2, lakehouse_dir=tmp_path)["snapshots"] == 0
+
+
+def test_a_load_written_in_several_snapshots_is_one_load(tmp_path):
+    """A dlt `replace` load copies its table in a file at a time, so one load is
+    several snapshots of it. Counted as loads, the newest two were halves of the
+    latest load: expiry deleted the load before it from the only copy, and the
+    pair's diff reported the second half as new rows. Reproduced through dlt
+    with `DATA_WRITER__FILE_MAX_ITEMS=500` (2026-10-06): ten versions for two
+    loads, and 500 rows "new" in an identical reload."""
+    restated = [("2020-01", "2020-01-01", 1_234.5), *BIG_LOAD[1:]]
+    _write(tmp_path, [BIG_LOAD, BIG_LOAD, restated], snapshots_per_load=2)
+
+    lakehouse.expire(keep=2, lakehouse_dir=tmp_path)
+
+    versions = lakehouse.versions(TABLE, tmp_path)
+    con = _connect(tmp_path)
+    try:
+        previous = con.execute(
+            f"select count(*) from lakehouse.{TABLE} at (version => {versions[0]})"
+        ).fetchone()
+    finally:
+        con.close()
+    assert len(versions) == 2
+    assert previous == (len(BIG_LOAD),), "the older of the pair is part of a load"
+    changed = lakehouse.revisions(TABLE, versions[0], versions[1], tmp_path)
+    assert [(row[0], row[2]) for row in changed] == [("2020-01", 1_234.5)]
+
+
+def test_a_load_with_no_record_in_dlt_loads_is_not_a_version(tmp_path):
+    """Rows with no `_dlt_loads` row after them are a load still running, or one
+    that crashed, and can be any fraction of it. As a version they would be the
+    newest, the one a reader diffs the last load against, and the newer half of
+    the pair expiry keeps."""
+    _write(tmp_path, [BIG_LOAD, BIG_LOAD])
+    finished = lakehouse.versions(TABLE, tmp_path)
+    con = duckdb.connect()
+    attach(con, tmp_path / "catalog.duckdb", tmp_path / "data", alias="lakehouse")
+    try:
+        con.execute(f"delete from lakehouse.{TABLE}")
+        con.execute(
+            f"insert into lakehouse.{TABLE} "
+            "values ('2020-01', date '2020-01-01', 1.0, 'crashed', 'id')"
+        )
+    finally:
+        con.close()
+
+    assert lakehouse.versions(TABLE, tmp_path) == finished
+    lakehouse.expire(keep=2, lakehouse_dir=tmp_path)
+    assert lakehouse.versions(TABLE, tmp_path) == finished
+
+
+def test_expiry_that_would_leave_no_load_is_refused(tmp_path):
+    with pytest.raises(ValueError, match="at least the current load"):
+        lakehouse.expire(keep=0, lakehouse_dir=tmp_path)
+
+
+def _age(path, days: float) -> None:
+    import os
+    import time
+
+    then = time.time() - days * 86_400
+    os.utime(path, (then, then))
+
+
+def test_an_orphan_is_deleted_only_once_it_is_older_than_a_write_could_be(tmp_path):
+    """An orphan is Parquet the catalog never recorded — a crashed load's, or
+    one still being written. The grace window is what tells them apart."""
+    from modern_data_stack.ducklake import expire
+
+    _write(tmp_path, [BIG_LOAD])
+    stale, fresh = tmp_path / "data" / "stale.parquet", tmp_path / "data" / "fresh.parquet"
+    for path in (stale, fresh):
+        duckdb.sql(f"copy (select 1 as x) to '{path}' (format parquet)")
+    _age(stale, days=2)
+
+    con = duckdb.connect()
+    attach(con, tmp_path / "catalog.duckdb", tmp_path / "data", alias="lakehouse")
+    try:
+        freed = expire(con, "lakehouse", before=0, delete_orphans=True)
+    finally:
+        con.close()
+    assert freed["orphans"] == 1
+    assert not stale.exists()
+    assert fresh.exists()
+
+
+def test_a_single_load_expires_nothing_but_still_sweeps_orphans(tmp_path):
+    """The pair gates expiring snapshots, not deleting files: a first load that
+    crashed would otherwise keep its orphans until a second load arrived."""
+    _write(tmp_path, [BIG_LOAD])
+    orphan = tmp_path / "data" / "crashed.parquet"
+    duckdb.sql(f"copy (select 1 as x) to '{orphan}' (format parquet)")
+    _age(orphan, days=2)
+
+    freed = lakehouse.expire(keep=2, lakehouse_dir=tmp_path)
+
+    assert freed["snapshots"] == 0
+    assert freed["orphans"] == 1
+    assert not orphan.exists()
+
+
+def test_expiry_leaves_a_directory_with_no_catalog_alone(tmp_path):
+    """Attaching for writes would create an empty catalog there."""
+    assert lakehouse.expire(lakehouse_dir=tmp_path)["snapshots"] == 0
+    assert not (tmp_path / lakehouse.CATALOG_NAME).exists()
+
+
+@pytest.mark.parametrize(
+    ("where", "deletes_orphans"), [("disk", True), ("s3://bucket/lake/", False)]
+)
+def test_orphans_are_deleted_only_from_a_data_path_on_disk(
+    where, deletes_orphans, monkeypatch, tmp_path
+):
+    """A bucket prefix can hold what this catalog does not own — `just
+    test-pipeline` writes its fixture runs under `test-pipeline/` in the same
+    bucket — and an orphan sweep deletes whatever the catalog does not
+    recognise."""
+    spy = MagicMock(return_value={"snapshots": 0, "files": 0, "orphans": 0})
+    monkeypatch.setattr(lakehouse, "expire_catalog", spy)
+    monkeypatch.setattr(lakehouse, "is_catalog", lambda lakehouse_dir: True)
+    monkeypatch.setattr(lakehouse, "attach_lakehouse", MagicMock())
+    monkeypatch.setattr(lakehouse, "table_versions", MagicMock(return_value=[1, 2]))
+    monkeypatch.setattr(lakehouse, "storage", MagicMock(return_value={}))
+    if where != "disk":
+        monkeypatch.setenv(lakehouse.DATA_PATH_ENV_VAR, where)
+
+    lakehouse.expire(keep=2, lakehouse_dir=tmp_path)
+
+    assert spy.call_args.kwargs["delete_orphans"] is deletes_orphans
+    assert spy.call_args.args[2] == 1
 
 
 def test_the_attach_alias_is_the_database_dbt_declares():

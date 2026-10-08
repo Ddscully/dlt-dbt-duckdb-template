@@ -154,6 +154,25 @@ def test_the_jobs_between_them_cover_every_asset():
     assert assets.EVIDENCE_SITE in _job_keys("publish_site")
 
 
+def test_snapshot_expiry_follows_every_other_asset_in_full_refresh():
+    """Expiry deletes from the only copy of every landing table, so it must run
+    only once the load has proved itself: a step whose upstream failed is
+    skipped, and nothing else stops it. Placed on the raw assets alone it ran
+    second, straight after the load, and expired on through a failed dbt build.
+    """
+    from orchestration import assets
+    from orchestration.definitions import defs
+
+    expiry = assets.snapshot_expiry.key
+    graph = defs.resolve_job_def("full_refresh").asset_layer.asset_graph
+    upstream = dg.AssetSelection.assets(expiry).upstream().resolve(graph)
+    not_before = _job_keys("full_refresh") - upstream
+    assert not not_before, (
+        "these assets can run after lakehouse expiry, or fail without stopping it: "
+        f"{sorted(k.to_user_string() for k in not_before)}"
+    )
+
+
 def test_the_routine_jobs_are_not_partitioned():
     """A partitioned job's Materialize button in the Dagster UI launches a
     backfill, and its dialog has no "no partition" choice: only the Launchpad

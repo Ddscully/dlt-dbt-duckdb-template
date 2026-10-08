@@ -3,7 +3,8 @@
 dlt writes straight into this DuckLake catalog, dbt reads `raw` from it, and
 `data/warehouse.duckdb` holds only what dbt builds.
 
-Run:  uv run python -m lake.lakehouse       (report the catalog's snapshots)
+Run:  uv run python -m lake.lakehouse            (report the catalog's snapshots)
+      uv run python -m lake.lakehouse --expire   (expire old snapshots first)
 
 ## Reading what changed
 
@@ -11,8 +12,28 @@ Run:  uv run python -m lake.lakehouse       (report the catalog's snapshots)
 `_dlt_load_id` on every row it re-merges, so reloading 500 identical rows reports
 500 updates. `revisions()` diffs two snapshots with `EXCEPT` instead, projecting
 those columns away — measured at 0 rows for an identical reload and 1 for a
-one-row change. It works between any two snapshots and needs no bookkeeping, so
-it needs no bookkeeping of its own. The cost is two scans.
+one-row change. It works between any two surviving snapshots and needs no
+bookkeeping. The cost is two scans.
+
+## A load is not a snapshot
+
+A dlt `replace` load copies its table in a file at a time, one snapshot each,
+so a load of a large source (or any load under `DATA_WRITER__FILE_MAX_ITEMS`) is
+several versions of the table, every one but the last a partial state. dlt's
+last step in a load is its row in `_dlt_loads`, so `versions()` reads each
+load at that row's snapshot: a diff between two of them is a diff between two
+whole loads. Counted as snapshots instead, the newest pair was two halves of the
+latest load — a diff reporting the second half as new rows, and an expiry that
+deleted the load before it.
+
+## Expiry
+
+Nothing is freed until snapshots expire: every `replace` load rewrites its table
+and the old files stay readable at older versions. `expire()` keeps the last
+`KEEP_LOADS` loads of `HISTORY_TABLE`, so those stay a diffable pair. It counts
+loads rather than days because a catalog left idle past any window of days
+would lose every snapshot but the newest, and with it the pair. Expiry is
+catalog-wide, so the other tables' rewrites since the older of the two stay too.
 
 ## Why the working paths are absolute
 
@@ -30,16 +51,20 @@ here then need the endpoint and keys on each connection (`storage_secret`).
 
 from __future__ import annotations
 
+import argparse
 import os
+from bisect import bisect_left
 from pathlib import Path
 
 import duckdb
 
 from modern_data_stack.ducklake import (
     attach,
+    expire as expire_catalog,
     revisions as diff_snapshots,
     row_count,
     snapshots,
+    storage,
     table_versions,
 )
 from modern_data_stack.paths import lakehouse_dir as default_lakehouse_dir
@@ -71,6 +96,15 @@ ATTACH_ALIAS = "lakehouse"
 # or not — see the module docstring. Every comparison here projects them away.
 DLT_COLUMNS = ("_dlt_load_id", "_dlt_id")
 
+# dlt's record of finished loads, one row each, in the schema it loaded into.
+DLT_LOADS_TABLE = "_dlt_loads"
+
+# The table whose last `KEEP_LOADS` loads `expire` keeps as a diffable pair — the
+# one whose history you read. It must name a landing table, or nothing ever
+# expires; `tests/test_lakehouse.py` holds it to the resource lists.
+HISTORY_TABLE = "raw.gold_prices_monthly"
+KEEP_LOADS = 2
+
 __all__ = [
     "ATTACH_ALIAS",
     "CATALOG_NAME",
@@ -78,11 +112,16 @@ __all__ = [
     "DATA_PATH_ENV_VAR",
     "DEFAULT_S3_REGION",
     "DLT_COLUMNS",
+    "DLT_LOADS_TABLE",
+    "HISTORY_TABLE",
+    "KEEP_LOADS",
     "LAKEHOUSE_DIR",
     "S3_ENDPOINT_ENV_VAR",
+    "attach_lakehouse",
     "catalog_path",
     "data_path",
     "dlt_credentials",
+    "expire",
     "is_catalog",
     "main",
     "read_only_connection",
@@ -233,19 +272,27 @@ def is_catalog(lakehouse_dir: str | Path = LAKEHOUSE_DIR) -> bool:
 def read_only_connection(lakehouse_dir: str | Path = LAKEHOUSE_DIR) -> duckdb.DuckDBPyConnection:
     """An in-memory DuckDB with the lakehouse attached read-only.
 
-    Every caller is a reader. Read-only readers can share the catalog with each
-    other, never with a writer — the same rule as the warehouse file.
+    Every caller but `expire` is a reader. Read-only readers can share the
+    catalog with each other, never with a writer — the same rule as the
+    warehouse file.
     """
     con = duckdb.connect()
+    attach_lakehouse(con, lakehouse_dir, read_only=True)
+    return con
+
+
+def attach_lakehouse(
+    con: duckdb.DuckDBPyConnection, lakehouse_dir: str | Path, read_only: bool
+) -> None:
+    """Attach this landing zone to `con` as `ATTACH_ALIAS`, with its storage secret."""
     attach(
         con,
         catalog_path(lakehouse_dir),
         data_path(lakehouse_dir),
         alias=ATTACH_ALIAS,
-        read_only=True,
+        read_only=read_only,
         storage_secret=storage_secret(),
     )
-    return con
 
 
 def revisions(
@@ -267,10 +314,56 @@ def revisions(
 
 
 def versions(table: str, lakehouse_dir: str | Path = LAKEHOUSE_DIR) -> list[int]:
-    """Snapshots in which `table` changed, oldest first — the diffable points."""
+    """One snapshot per finished load that changed `table`, oldest first — the diffable points.
+
+    Each is the snapshot of the load's `_dlt_loads` row, where the table reads
+    as that load left it (module docstring).
+    """
     con = read_only_connection(lakehouse_dir)
     try:
-        return table_versions(con, ATTACH_ALIAS, table)
+        return _loads(con, table)
+    finally:
+        con.close()
+
+
+def _loads(con: duckdb.DuckDBPyConnection, table: str) -> list[int]:
+    # Every change belongs to the first load recorded at or after it. One after
+    # the last record is a load still running, or one that crashed, and is not
+    # a version yet. An expired snapshot reads as the next surviving one, so the
+    # oldest survivor stands for every load before it.
+    changes = table_versions(con, ATTACH_ALIAS, table)
+    schema = table.split(".", 1)[0]
+    ends = table_versions(con, ATTACH_ALIAS, f"{schema}.{DLT_LOADS_TABLE}")
+    return sorted(
+        {ends[i] for i in (bisect_left(ends, change) for change in changes) if i < len(ends)}
+    )
+
+
+def expire(keep: int = KEEP_LOADS, lakehouse_dir: str | Path = LAKEHOUSE_DIR) -> dict[str, int]:
+    """Expire the snapshots before the `keep`-th newest load of `HISTORY_TABLE`, and their files.
+
+    The cut is at that load's `_dlt_loads` row, so the oldest snapshot kept is
+    the whole load, not its first file (module docstring). With fewer loads than
+    `keep` nothing expires, but unreferenced files and orphans still go. Orphans
+    are deleted only from `data/` on disk: a bucket prefix may hold what this
+    catalog does not own. Returns the counts and the catalog's bytes afterwards.
+    """
+    if keep < 1:
+        raise ValueError(f"keep={keep}: expiry must leave at least the current load")
+    # Attaching for writes would create an empty catalog where there is none.
+    if not is_catalog(lakehouse_dir):
+        return {"snapshots": 0, "files": 0, "orphans": 0, "bytes": 0, "live_bytes": 0}
+    con = duckdb.connect()
+    try:
+        attach_lakehouse(con, lakehouse_dir, read_only=False)
+        loads = _loads(con, HISTORY_TABLE)
+        freed = expire_catalog(
+            con,
+            ATTACH_ALIAS,
+            loads[-keep] if len(loads) >= keep else None,
+            delete_orphans=isinstance(data_path(lakehouse_dir), Path),
+        )
+        return {**freed, **storage(con, ATTACH_ALIAS)}
     finally:
         con.close()
 
@@ -307,18 +400,45 @@ def run(lakehouse_dir: str | Path = LAKEHOUSE_DIR) -> dict:
             f"{schema}.{name}": row_count(con, ATTACH_ALIAS, f"{schema}.{name}")
             for schema, name in tables
         }
-        return {"tables": counts, "snapshots": snapshots(con, ATTACH_ALIAS)}
+        return {
+            "tables": counts,
+            "snapshots": snapshots(con, ATTACH_ALIAS),
+            "storage": storage(con, ATTACH_ALIAS),
+        }
     finally:
         con.close()
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--expire",
+        type=int,
+        nargs="?",
+        const=KEEP_LOADS,
+        metavar="KEEP",
+        help=f"first expire all but the last KEEP loads of {HISTORY_TABLE} (default {KEEP_LOADS})",
+    )
+    args = parser.parse_args()
+    if args.expire is not None:
+        freed = expire(args.expire)
+        print(
+            f"expired {freed['snapshots']} snapshots, deleted {freed['files']} files "
+            f"and {freed['orphans']} orphans"
+        )
+
     summary = run()
     snaps = summary["snapshots"]
     if not summary["tables"] and not snaps:
         print(f"{catalog_path()} — no catalog yet; run `just ingest`")
         return
     print(f"{catalog_path()} — {len(snaps)} snapshots, newest {snaps[-1] if snaps else '(none)'}")
+    size = summary["storage"]
+    # The gap is what the kept snapshots still read, so it survives an expiry.
+    print(
+        f"  {size['live_bytes'] / 1e6:,.1f} MB live of {size['bytes'] / 1e6:,.1f} MB "
+        "in the files the catalog records"
+    )
     for table, rows in summary["tables"].items():
         print(f"  {table:40} {rows:>10,} rows")
 

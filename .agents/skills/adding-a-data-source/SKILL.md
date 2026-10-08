@@ -136,6 +136,7 @@ just materialize     # the same, through the asset graph
 
 The same list in reverse, and the guards will find what you miss: the fixture
 (orphan test), `RAW_DESCRIPTIONS` (definitions test), the exposure (exposures
-test), the report maps (report test). The one nothing checks is the landing
-table itself — dropping the resource leaves the rows in the DuckLake catalog,
-where earlier snapshots keep them readable.
+test), the report maps (report test), and `lake.lakehouse.HISTORY_TABLE`, the
+table expiry counts loads of (lakehouse test). The one nothing checks is the
+landing table itself — dropping the resource leaves its table in the DuckLake
+catalog, current and readable, until you drop it there.
