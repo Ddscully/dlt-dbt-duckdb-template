@@ -23,14 +23,21 @@ import requests
 
 from ingest import fixtures
 
+# Waits of 4, 8, 16 and 32 s between five attempts: a minute, which outlasts the
+# transient error pages public APIs serve. A healthy fetch never sleeps.
+RETRIES = 5
+BACKOFF_SECONDS = 4.0
 
-def get_json(url: str, *, timeout: int = 120, retries: int = 3) -> dict | list:
-    """GET + parse JSON with a few retries — public APIs return a transient
-    error page or a non-JSON body often enough to be worth handling once.
 
-    A non-2xx status is retried and ultimately raised: without the
-    `raise_for_status()` an HTML/JSON error body would parse fine and be handed
-    on as if it were data.
+def get_json(url: str, *, timeout: int = 120, retries: int = RETRIES) -> dict | list:
+    """GET + parse JSON with retries — public APIs return a transient error
+    page or a non-JSON body often enough to be worth waiting out.
+
+    A 5xx, 429, timeout, reset or unparseable body is retried with doubling
+    waits and ultimately raised: without the `raise_for_status()` an HTML/JSON
+    error body would parse fine and be handed on as if it were data. Any other
+    4xx raises at once: the request itself is wrong, and a minute of retries
+    would get the same answer.
     """
     if fixtures.enabled():
         path = fixtures.path_for(url)
@@ -46,14 +53,19 @@ def get_json(url: str, *, timeout: int = 120, retries: int = 3) -> dict | list:
             resp = requests.get(url, timeout=timeout)
             resp.raise_for_status()
             return resp.json()
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else 0
+            if 400 <= status < 500 and status != 429:
+                raise
+            last = exc
         except (requests.RequestException, ValueError) as exc:  # ValueError = JSONDecodeError
             last = exc
-            if attempt < retries - 1:
-                time.sleep(1.5 * (attempt + 1))
+        if attempt < retries - 1:
+            time.sleep(BACKOFF_SECONDS * 2**attempt)
     raise RuntimeError(f"failed to fetch JSON from {url}: {last}")
 
 
-def get_json_object(url: str, *, timeout: int = 120, retries: int = 3) -> dict:
+def get_json_object(url: str, *, timeout: int = 120, retries: int = RETRIES) -> dict:
     """`get_json` for an endpoint that documents a JSON *object*.
 
     `get_json` returns `dict | list`, because plenty of APIs answer with a

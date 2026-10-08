@@ -52,6 +52,12 @@ orchestration = [
     "dagster-dlt>=0.29.15",       # dlt resources -> assets, with subset loading
     "dagster-webserver>=1.13.15", # the UI behind `just dagster`
 ]
+# Never synced: locked so that `.github/actions/setup` installs the `just` that
+# uv.lock names, and Dependabot's `uv` ecosystem bumps it there. Synced, it would
+# put a second `just` on the venv's PATH.
+tools = [
+    "rust-just>=1.56.0",  # the command runner every workflow calls
+]
 
 [project.scripts]
 mds = "modern_data_stack:main"

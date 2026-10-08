@@ -19,6 +19,7 @@ holding the *plumbing* to the tree:
 | `test_additivity.py` | that every numeric mart column declares whether it may be summed |
 | `test_bus_matrix.py` | that the matrix in `docs/WAREHOUSE.md` is what the manifest currently implies |
 | `test_lakehouse.py` | the substitute for DuckLake's change feed, that expiry keeps the last two loads diffable and deletes only what it owns, and that the three spellings of the `lakehouse` alias agree |
+| `test_http.py` | the retry schedule every JSON fetch goes through: a minute of doubling waits, a 429 retried, any other 4xx raised at once |
 | `test_workflows.py` | the hand-maintained lists in `.github/` and the justfile |
 | `test_skills.py` | that every path and `just` recipe the skills cite exists |
 | `test_agent_instructions.py` | that each agent's entry point still reaches `AGENTS.md` |

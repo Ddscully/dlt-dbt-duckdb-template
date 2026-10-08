@@ -1,8 +1,11 @@
 # Lightweight orchestration. `just <recipe>`; run `just` to list.
 # (Install: `uv tool install rust-just` or use your package manager.)
 #
-# `just --list` shows only the comment line directly above a recipe, so each
-# recipe's one-line summary is the last line of its comment block.
+# `just --list` shows only the last comment line before a recipe, so each
+# recipe's one-line summary ends its comment block, above the `[group]` line.
+# Every public recipe takes a group, and `default` lists them unsorted: a group
+# appears where its first recipe does, and its recipes in file order, so
+# `ingest` stays ahead of `dbt-build`. A recipe without a group lists above them all.
 
 set dotenv-load := true
 
@@ -20,13 +23,14 @@ export DAGSTER_HOME := env("DAGSTER_HOME", justfile_directory() / ".dagster")
 export LAKEHOUSE_DIR := env("LAKEHOUSE_DIR", justfile_directory() / "data/lakehouse")
 
 default:
-    @just --list
+    @just --list --unsorted
 
 # dbt's log names the target (`target='dev'`, the only one) and never the file,
 # so every recipe that writes to the warehouse or the landing zone depends on
 # this. `test-pipeline` does not: it exports its own WAREHOUSE_PATH, and this
 # would print the outer value.
 # Print which warehouse file and landing zone the pipeline recipes will use
+[group('setup')]
 where: _no-dbt-dotenv
     @echo "warehouse: ${WAREHOUSE_PATH:-(unset - this repo's data/warehouse.duckdb)}"
     @echo "lakehouse: $LAKEHOUSE_DIR"
@@ -51,11 +55,13 @@ _no-dbt-dotenv:
 # and any network failure, out of a `dbt build` inside a Dagster op. DuckDB
 # fetches the build for its own version, so under `uv run` it matches uv.lock.
 # One-time: install runtime + dev deps into the uv-managed venv, and the DuckLake extension
+[group('setup')]
 setup:
     uv sync --group dev --group orchestration
     uv run python -c "import duckdb; duckdb.connect().execute('install ducklake')"
 
 # EL: pull public sources into the DuckLake landing zone
+[group('pipeline')]
 ingest: where
     uv run python -m ingest.pipeline
 
@@ -64,6 +70,7 @@ ingest: where
 # it. `just dlt-state my_warehouse_fixtures` reads the fixture pipeline's — the
 # separate name is what stops a fixture run handing its watermarks to a real one.
 # Show dlt's incremental state — each resource's watermark
+[group('inspect')]
 dlt-state pipeline="my_warehouse":
     uv run dlt pipeline {{ pipeline }} info -v
 
@@ -71,11 +78,13 @@ dlt-state pipeline="my_warehouse":
 # every invocation (`dbt parse` and sqlfluff's templater included), and DuckLake
 # will not create the catalog's parent directory.
 # Install dbt packages (dbt_utils) into the gitignored dbt/dbt_packages/
+[group('pipeline')]
 dbt-deps:
     mkdir -p "$LAKEHOUSE_DIR"
     cd dbt && uv run dbt deps
 
 # T: build + test dbt models
+[group('pipeline')]
 dbt-build: where dbt-deps
     cd dbt && uv run dbt build
 
@@ -83,6 +92,7 @@ dbt-build: where dbt-deps
 # gitignored, so every headless `dagster` recipe depends on this. `just dagster`
 # does not: `prepare_if_dev()` parses under the dev CLI.
 # Write dbt/target/manifest.json — the Dagster graph won't load without it
+[group('pipeline')]
 dbt-parse: dbt-deps
     cd dbt && uv run dbt parse
 
@@ -91,6 +101,7 @@ dbt-parse: dbt-deps
 # models' parents must exist in the warehouse (schema only); run `just dbt-build`
 # once if they don't.
 # dbt unit tests only — mocked inputs, the inner loop for model logic
+[group('check')]
 dbt-unit-test: dbt-deps
     cd dbt && uv run dbt test --select test_type:unit
 
@@ -98,19 +109,23 @@ dbt-unit-test: dbt-deps
 # ingest, so this measures when the pipeline last ran, not when a publisher last
 # published.
 # Is the warehouse stale? `dbt source freshness` against dlt's load ids
+[group('inspect')]
 dbt-freshness: dbt-deps
     cd dbt && uv run dbt source freshness
 
 # Needs a built warehouse, or the catalog's columns come back untyped.
 # Render the dbt metadata layer to dbt/target/ — columns, contracts, groups, exposures, versions, tests
+[group('inspect')]
 dbt-docs: dbt-deps
     cd dbt && uv run dbt docs generate
 
 # Serve the dbt docs site on :8080, regenerated first (blocks; ctrl-c to stop)
+[group('inspect')]
 dbt-docs-serve: dbt-docs
     cd dbt && uv run dbt docs serve
 
 # Report what the DuckLake landing zone holds — tables, rows, snapshots (read-only)
+[group('inspect')]
 lakehouse:
     uv run python -m lake.lakehouse
 
@@ -119,27 +134,33 @@ lakehouse:
 # it. `keep` defaults to `KEEP_LOADS`, so the constant is the one place the
 # number lives.
 # Expire lakehouse snapshots before the last `keep` loads, and their files
+[group('pipeline')]
 lakehouse-expire keep="": where
     uv run python -m lake.lakehouse --expire {{ keep }}
 
 # Polars derived metrics
+[group('pipeline')]
 transform: where
     uv run python -m transform.gold_price_trend
 
 # Run after dbt-build: it reads dbt_test__audit and dbt's artifacts.
 # Pipeline observability tables (load times, layer inventory, dbt test failures)
+[group('pipeline')]
 pipeline-status: where
     uv run python -m transform.pipeline_status
 
 # Full pipeline via shell ordering (see `just materialize` for the graph-aware one)
+[group('pipeline')]
 run: ingest dbt-build transform pipeline-status lakehouse-expire
 
 # Unit tests — mocked API payloads, no network, no warehouse
+[group('check')]
 test:
     uv run pytest
 
 # Two commands so a failing suite stops before a percentage is printed.
 # Line + branch coverage of `just test` — reports, gates nothing
+[group('check')]
 coverage:
     uv run coverage run -m pytest
     uv run coverage report
@@ -147,6 +168,7 @@ coverage:
 # CI runs the same graph through `just materialize` with INGEST_FIXTURES set;
 # this is the shell-ordered version, plus a second load to exercise expiry.
 # The whole pipeline against checked-in fixtures, into a throwaway warehouse
+[group('check')]
 test-pipeline: _no-dbt-dotenv
     #!/usr/bin/env bash
     set -euo pipefail
@@ -184,27 +206,32 @@ test-pipeline: _no-dbt-dotenv
 # Reads dbt/target/manifest.json (`just dbt-parse`), never the warehouse: grains
 # come from the uniqueness tests, columns from the enforced contracts.
 # Which conformed dimensions does each fact carry? -> docs/WAREHOUSE.md
+[group('publish')]
 bus-matrix:
     uv run python -m publish.bus_matrix
 
 # Re-record the fixtures from the live APIs (hits the network; commit the diff)
+[group('check')]
 record-fixtures:
     uv run python -m scripts.record_fixtures
 
 # Prints a SupersessionWarning naming `dg dev`. Every Dagster CLI command here
 # carries one, and none is on a removal clock (AGENTS.md's orchestration section).
 # Dagster UI on :3000 — asset graph, run history, freshness, checks
+[group('dagster')]
 dagster:
     mkdir -p "$DAGSTER_HOME"
     uv run --group orchestration dagster dev
 
 # See orchestration/definitions.py for why the site is a second job.
 # Full pipeline ordered by the asset graph, minus the Evidence site
+[group('dagster')]
 materialize: where dbt-parse
     mkdir -p "$DAGSTER_HOME"
     uv run --group orchestration dagster job execute -m orchestration.definitions -j full_refresh
 
 # The same graph with the Evidence site on the end of it (needs Node)
+[group('dagster')]
 materialize-site: where dbt-parse
     mkdir -p "$DAGSTER_HOME"
     uv run --group orchestration dagster job execute -m orchestration.definitions -j publish_site
@@ -213,6 +240,7 @@ materialize-site: where dbt-parse
 # matches nothing and exits 0. Write `key:"marts/*"`; `group:`, `kind:`,
 # `sinks(...)` and `roots(...)` also work. Check with `just materialize-preview`.
 # Materialize a selection, e.g. `just materialize-select 'raw/gold_prices_monthly*'` (* = all downstream, + = one layer)
+[group('dagster')]
 materialize-select selection: where dbt-parse
     mkdir -p "$DAGSTER_HOME"
     uv run --group orchestration dagster asset materialize \
@@ -220,6 +248,7 @@ materialize-select selection: where dbt-parse
 
 # A selection matching no assets is not an error to `materialize`, so look first.
 # Print the assets a selection resolves to, without materializing any of them
+[group('dagster')]
 materialize-preview selection: dbt-parse
     uv run --group orchestration dagster asset list \
         -m orchestration.definitions --select '{{ selection }}'
@@ -228,6 +257,7 @@ materialize-preview selection: dbt-parse
 # manifest it fails to load rather than reporting what is unregistered. No `-m`,
 # which leaves the location named as `[tool.dagster]` names it.
 # Check the code location loads and every definition is registered
+[group('dagster')]
 validate: dbt-parse
     uv run --group orchestration dagster definitions validate
 
@@ -241,6 +271,7 @@ validate: dbt-parse
 # after `storage_secret()` and the dbt profile. The keys go in through the CLI's
 # `getenv`, so they never appear in the process list.
 # Open the warehouse in the DuckDB CLI (`just sql write` for a writer)
+[group('inspect')]
 sql mode="read":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -268,23 +299,27 @@ sql mode="read":
 # directory git cannot track once its .gitkeep is gone, which would red-light CI
 # for a project that simply has no snapshots.
 # Lint the dbt models and snapshots with sqlfluff
+[group('check')]
 lint: dbt-deps
     cd dbt && uv run sqlfluff lint models $([ -d snapshots ] && echo snapshots)
 
 # ty is pre-1.0 and runs in neither pre-commit nor CI; `uv run` so the locked
 # version answers. Suppressions go inline as `# ty: ignore[rule]`.
 # Type-check the Python — reports, gates nothing
+[group('check')]
 typecheck:
     uv run ty check
 
 # The same module the `reports/evidence_site` asset calls.
 # Build the Evidence dashboard (requires Node)
+[group('publish')]
 report:
     uv run python -m publish.build_report
 
 # Evidence caches each source's schema and does not notice a column change, so
 # use this rather than `report` after any mart or analytics column changes.
 # Drop Evidence's schema cache, re-extract the sources, then build
+[group('publish')]
 report-clean:
     uv run python -m publish.build_report --clean
 
@@ -296,6 +331,7 @@ report-clean:
 # the same file. Deleting it is `rm data/warehouse.duckdb`, which at least looks
 # like what it is.
 # Reclaim gitignored build output (`deep` also drops reports/node_modules)
+[group('setup')]
 clean scope="safe":
     #!/usr/bin/env bash
     set -euo pipefail
