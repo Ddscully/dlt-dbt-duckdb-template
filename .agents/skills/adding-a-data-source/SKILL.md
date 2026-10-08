@@ -32,6 +32,21 @@ def gold_prices_monthly():
   `from ingest.http import get_json`. A unit test for the source patches them
   through the module; a by-name import binds the unpatched original, and the
   test then passes while exercising the real fetch.
+- **No environment variable may share a name with a source or resource
+  argument.** An argument with a default that a call leaves out is resolved as
+  configuration, and dlt's lookup ends at the bare upper-case name. Anything
+  passed explicitly, `None` included, is not looked up, and an argument with no
+  default is never config. With `START_YEAR=1990` in the environment,
+  `start_year: int = 2000` arrives as 1990, with no warning. `START_YEAR="2017
+  2026"` raises `ConfigValueCannotBeCoercedException` where the source is
+  called without it, and `orchestration/assets.py` does that at import, so every
+  Dagster command fails. A tuple argument coerces from neither `"2017 2026"` nor
+  `"[2017, 2026]"` (all measured on dlt 1.30). A `workflow_dispatch` input is not
+  an environment variable and may carry the argument's name. A step's or job's
+  `env:`, an `echo … >> "$GITHUB_ENV"` line, the setup action, the justfile and
+  `.env.example` may not. The reference repo lost a release dispatch to
+  `WEATHER_YEARS` in a step's `env:` and now maps the input to
+  `WEATHER_YEARS_INPUT` (Ddscully/dlt-dbt-duckdb-evidence#131).
 - Then register it in `ingest/pipeline.py`: add it to the `@dlt.source`, and to
   **exactly one** of `FULL_REFRESH_RESOURCES` or `INCREMENTAL_RESOURCES`.
 
