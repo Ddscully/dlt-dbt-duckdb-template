@@ -153,9 +153,11 @@ everything else into `data/warehouse.duckdb`. The full account is
 - **Contracts are enforced on every mart model**, so a column changing type
   fails the build before it writes. **Never round-trip these ymls through
   PyYAML**: it reflows every description to add a scalar.
-- **Select an asset prefix as `key:"marts/*"`.** A bare `marts/*` materialises
-  nothing and exits 0; `just materialize-preview` shows what a selection
-  resolves to.
+- **Select an asset prefix as `key:"marts/*"`.** A bare `marts/*` names a key
+  that does not exist, and **a selection matching no assets launches every
+  asset**, live ingest and the site included. `just materialize-select` refuses
+  one; a bare `dagster asset materialize` does not. `just materialize-preview`
+  shows what a selection resolves to.
 - **dlt only widens types, and a load is two `run()`s**: the `replace` resources
   with `refresh="drop_resources"`, the `merge` resources without, or the refresh
   drops a merge table and its watermark. A new resource must join

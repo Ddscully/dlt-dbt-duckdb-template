@@ -237,16 +237,30 @@ materialize-site: where dbt-parse
     uv run --group orchestration dagster job execute -m orchestration.definitions -j publish_site
 
 # A bare prefix is not a glob: `marts/*` means "downstream of the key `marts/`",
-# matches nothing and exits 0. Write `key:"marts/*"`; `group:`, `kind:`,
-# `sinks(...)` and `roots(...)` also work. Check with `just materialize-preview`.
+# which does not exist. Write `key:"marts/*"`; `group:`, `kind:`, `sinks(...)`
+# and `roots(...)` also work. A selection matching no assets launches *every*
+# asset, live ingest and the site included: `execute_job` reads an empty
+# selection as none (dagster/_core/execution/api.py). So this resolves it first,
+# with the preview's command, and refuses an empty one. The preview tolerates a
+# missing key, so a bare prefix comes back empty and is refused here too.
 # Materialize a selection, e.g. `just materialize-select 'raw/gold_prices_monthly*'` (* = all downstream, + = one layer)
 [group('dagster')]
 materialize-select selection: where dbt-parse
+    #!/usr/bin/env bash
+    set -euo pipefail
     mkdir -p "$DAGSTER_HOME"
+    selection={{ quote(selection) }}
+    selected=$(uv run --group orchestration dagster asset list \
+        -m orchestration.definitions --select "$selection")
+    if [ -z "$selected" ]; then
+      echo "$selection matches no assets, and dagster asset materialize would run them all" >&2
+      exit 1
+    fi
     uv run --group orchestration dagster asset materialize \
-        -m orchestration.definitions --select '{{ selection }}'
+        -m orchestration.definitions --select "$selection"
 
-# A selection matching no assets is not an error to `materialize`, so look first.
+# Prints nothing for a selection matching no assets, which `materialize-select`
+# refuses.
 # Print the assets a selection resolves to, without materializing any of them
 [group('dagster')]
 materialize-preview selection: dbt-parse
