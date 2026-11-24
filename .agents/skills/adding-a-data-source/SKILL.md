@@ -22,9 +22,15 @@ the fixture router and the tests both read it by name.
 ```python
 @dlt.resource(name="gold_prices_monthly", write_disposition="replace")
 def gold_prices_monthly():
-    yield pl.read_csv(_csv_source(GOLD_PRICES_MONTHLY), infer_schema_length=None).to_dicts()
+    yield pl.read_csv(http.get_bytes(GOLD_PRICES_MONTHLY), infer_schema_length=None).to_dicts()
 ```
 
+- **Fetch through `ingest/http.py`, never by handing a library the URL.**
+  `get_bytes` for a whole file, `get_json` or `get_json_object` for an API: they
+  retry a 5xx, 408, 429, timeout, reset or unparseable body for a minute, log
+  each failed attempt, raise any other 4xx at once, and read the recorded
+  fixture under `INGEST_FIXTURES=1`. `pl.read_csv(url)` tries once, and a reset
+  connection fails the run.
 - **`infer_schema_length=None` scans the whole file.** Polars types a column
   from the first rows otherwise, so a column that is empty at the top of the
   file arrives as null.
