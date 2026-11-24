@@ -32,7 +32,7 @@ from lake.lakehouse import ATTACH_ALIAS, catalog_path, data_path
 from modern_data_stack.ducklake import attach
 from orchestration.resources import dbt_project
 
-# Importing `orchestration.assets` needs the manifest, which does not exist when
+# Importing `orchestration.defs` needs the manifest, which does not exist when
 # ci.yml first runs pytest. CI re-runs this file after `dbt parse`, which
 # `tests/test_workflows.py` enforces.
 pytestmark = pytest.mark.skipif(
@@ -47,8 +47,9 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def assets():
-    """The orchestration module, imported lazily so the skipif above can fire."""
-    from orchestration import assets as module
+    """The checks module, imported lazily so the skipif above can fire. Its
+    globals are what the tests patch (its docstring says why they live there)."""
+    from orchestration.defs import checks as module
 
     return module
 

@@ -1,12 +1,9 @@
-"""Every asset and check in `assets.py` is registered in `definitions.py`.
+"""What the graph `orchestration/definitions.py` builds must hold.
 
-`dg.Definitions` takes an explicit list, and nothing complains about an omission:
-the asset simply isn't in the graph, so `AssetSelection.all()` never sees it and
-`dagster definitions validate` passes. An unlisted asset fails somewhere
-downstream; an unlisted check fails *silently*, because it just never runs.
-
-The explicit list stays (it is the one place that says what the graph is); this
-is what makes forgetting it loud.
+Registration is not tested here: every asset and check under
+`orchestration/defs/` is loaded by import, so there is no list for one to be
+missing from. What is still written by hand is the jobs' selections, and
+reachable through them is what runs.
 """
 
 from __future__ import annotations
@@ -17,7 +14,7 @@ import pytest
 from orchestration.resources import dbt_project
 
 # `just test` runs before `dbt deps && dbt parse` in ci.yml, and importing
-# `orchestration.assets` needs the manifest that parse writes. CI re-runs this
+# `orchestration.defs` needs the manifest that parse writes. CI re-runs this
 # file after the parse step; skipping keeps the unit-test tier importable in a
 # fresh clone rather than failing it for a missing build artifact.
 pytestmark = pytest.mark.skipif(
@@ -25,75 +22,102 @@ pytestmark = pytest.mark.skipif(
     reason="needs dbt/target/manifest.json — run `just dbt-deps` and `dbt parse` first",
 )
 
-# The dlt-pipeline-deactivation fixture this file needs (importing the
-# orchestration layer leaves a dlt pipeline active process-wide) lives in
-# `tests/conftest.py`, shared with `test_asset_checks.py`.
+# The dlt-pipeline-deactivation fixture this file needs (loading the definitions
+# imports orchestration.defs.ingest, which leaves a dlt pipeline active
+# process-wide) lives in `tests/conftest.py`.
 
 
-def _defined_in_assets_module():
-    """(asset keys, check keys) declared at module level in `assets.py`."""
-    from orchestration import assets
-
-    asset_keys: set[dg.AssetKey] = set()
-    check_keys: set[dg.AssetCheckKey] = set()
-    for value in vars(assets).values():
-        # `AssetChecksDefinition` is a *subclass* of `AssetsDefinition`, so this
-        # order is load-bearing: the other way round every check falls into the
-        # first branch, contributes an empty `.keys`, and the check set comes out
-        # empty — a test that passes by measuring nothing.
-        if isinstance(value, dg.AssetChecksDefinition):
-            check_keys.update(value.check_keys)
-        elif isinstance(value, dg.AssetsDefinition):
-            asset_keys.update(value.keys)
-    return asset_keys, check_keys
+@dg.op
+def _op():
+    pass
 
 
-def test_every_asset_defined_is_in_the_graph():
-    from orchestration.definitions import defs
-
-    defined, _ = _defined_in_assets_module()
-    # Executable, not `get_all_asset_keys()`: an unregistered asset that
-    # something *depends on* still shows up in the graph as an external node, so
-    # the wider set would report a forgotten Polars asset as present purely
-    # because `pipeline_status` names it in `deps`.
-    in_graph = defs.resolve_asset_graph().executable_asset_keys
-
-    missing = defined - in_graph
-    assert not missing, (
-        "assets defined in orchestration/assets.py but not listed in "
-        f"orchestration/definitions.py: {sorted(k.to_user_string() for k in missing)}"
-    )
+@dg.graph
+def _graph():
+    _op()
 
 
-def test_every_asset_check_defined_is_in_the_graph():
-    from orchestration.definitions import defs
+@dg.repository
+def _repository():
+    return []
 
-    _, defined = _defined_in_assets_module()
-    in_graph = set(defs.resolve_asset_graph().asset_check_keys)
 
-    missing = defined - in_graph
-    assert not missing, (
-        "asset checks defined in orchestration/assets.py but not listed in "
-        f"orchestration/definitions.py: {sorted(k.to_user_string() for k in missing)}"
-    )
+@dg.io_manager
+def _io_manager(_):
+    return dg.InMemoryIOManager()
+
+
+class _Resource(dg.ConfigurableResource):
+    pass
+
+
+@dg.logger
+def _logger(_):
+    pass
+
+
+@pytest.mark.parametrize(
+    "stray",
+    [
+        dg.ScheduleDefinition(name="s", cron_schedule="0 1 * * *", target=dg.AssetSelection.all()),
+        dg.define_asset_job("j", selection=dg.AssetSelection.all()),
+        _graph,
+        _repository,
+        _io_manager,
+        dg.FilesystemIOManager(),
+        dg.ResourceDefinition.hardcoded_resource(1),
+        _Resource.configure_at_launch(),
+        _logger,
+        dg.in_process_executor,
+        dg.Definitions(),
+    ],
+    ids=[
+        "schedule",
+        "job",
+        "graph",
+        "repository",
+        "io_manager",
+        "io_manager_class_based",
+        "resource",
+        "resource_configured_at_launch",
+        "logger",
+        "executor",
+        "definitions",
+    ],
+)
+def test_a_defs_module_holding_what_the_loaders_skip_fails_the_load(stray):
+    """The package loaders take assets, specs and checks, and skip the rest silently.
+
+    A schedule written in `orchestration/defs/` would never fire with `just
+    validate` green, so `definitions.py` raises on one. The real package passing
+    is every other test here; this is the half that has to raise.
+    """
+    from types import ModuleType
+
+    from orchestration.definitions import refuse_what_the_loaders_skip
+
+    module = ModuleType("orchestration.defs.example")
+    vars(module).update(fine=dg.AssetSpec("a"), stray=stray)
+    with pytest.raises(dg.DagsterInvalidDefinitionError, match=r"example\.stray: only assets"):
+        refuse_what_the_loaders_skip([module])
 
 
 def test_every_raw_resource_has_an_asset_description():
     """`RAW_DESCRIPTIONS` re-enumerates the dlt resources, and cannot be derived:
     the prose is not computable from the source, so it is held to it instead.
 
-    `assets.py` reads it as `RAW_DESCRIPTIONS.get(name)`, which returns `None`
+    `orchestration/defs/ingest.py` reads it as `RAW_DESCRIPTIONS.get(name)`, which returns `None`
     for an unlisted resource. The asset then materialises with no description
     and nothing is red: the Dagster UI shows a blank where every sibling has a
     sentence.
 
     Lives here rather than beside the source's own tests because reading the dict
-    means importing `orchestration.assets`, which needs dagster (an optional
+    means importing `orchestration.defs`, which needs dagster (an optional
     group) and the manifest; this module already carries that skip and is
     re-run by CI after `dbt parse`.
     """
     from ingest import pipeline
-    from orchestration.assets import RAW_DESCRIPTIONS
+    from orchestration.defs.ingest import RAW_DESCRIPTIONS
 
     resources = {r.name for r in pipeline.public_indicators().resources.values()}
 
@@ -101,7 +125,7 @@ def test_every_raw_resource_has_an_asset_description():
     # catch different bugs and the failure message should say which happened.
     undescribed = resources - RAW_DESCRIPTIONS.keys()
     assert not undescribed, (
-        "dlt resources with no entry in orchestration/assets.py RAW_DESCRIPTIONS "
+        "dlt resources with no entry in orchestration/defs/ingest.py RAW_DESCRIPTIONS "
         f"(they materialise with no description): {sorted(undescribed)}"
     )
 
@@ -142,16 +166,17 @@ def test_the_jobs_between_them_cover_every_asset():
     dropped. Anything in no job is built by no workflow, and nothing else says
     so: `dagster definitions validate` passes on it.
     """
-    from orchestration import assets
+    from orchestration.definitions import defs
+    from orchestration.defs.site import EVIDENCE_SITE
 
-    defined, _ = _defined_in_assets_module()
+    defined = set(defs.resolve_asset_graph().executable_asset_keys)
     covered = _job_keys("full_refresh")
 
-    assert defined - covered == {assets.EVIDENCE_SITE}, (
+    assert defined - covered == {EVIDENCE_SITE}, (
         "the Evidence site is the only asset no pure-Python job may build; "
         f"unreachable: {sorted(k.to_user_string() for k in defined - covered)}"
     )
-    assert assets.EVIDENCE_SITE in _job_keys("publish_site")
+    assert EVIDENCE_SITE in _job_keys("publish_site")
 
 
 def test_snapshot_expiry_follows_every_other_asset_in_full_refresh():
@@ -160,10 +185,10 @@ def test_snapshot_expiry_follows_every_other_asset_in_full_refresh():
     skipped, and nothing else stops it. Placed on the raw assets alone it ran
     second, straight after the load, and expired on through a failed dbt build.
     """
-    from orchestration import assets
     from orchestration.definitions import defs
+    from orchestration.defs.ingest import snapshot_expiry
 
-    expiry = assets.snapshot_expiry.key
+    expiry = snapshot_expiry.key
     graph = defs.resolve_job_def("full_refresh").asset_layer.asset_graph
     upstream = dg.AssetSelection.assets(expiry).upstream().resolve(graph)
     not_before = _job_keys("full_refresh") - upstream
@@ -214,7 +239,7 @@ def test_the_dbt_build_writes_its_run_results_where_the_reader_looks():
     from typing import Any
 
     from modern_data_stack.paths import dbt_run_results_path, dbt_target_path
-    from orchestration import assets
+    from orchestration.defs import models
 
     called_with: list[str] = []
     kwargs_seen: dict[str, Any] = {}
@@ -234,7 +259,7 @@ def test_the_dbt_build_writes_its_run_results_where_the_reader_looks():
     # yielded, which is exactly the part being asserted. Dagster types
     # `compute_fn` as a union that does not narrow to the decorated half, so the
     # annotation states the gap rather than adding a `ty: ignore`.
-    compute: Any = assets.dbt_models.op.compute_fn
+    compute: Any = models.dbt_models.op.compute_fn
     list(compute.decorated_fn(context=None, dbt=_Dbt()))
 
     assert called_with == ["build"]

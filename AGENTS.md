@@ -175,8 +175,11 @@ and `transform` stay independently runnable.
 - **A partitioned asset makes its job's Materialize button a backfill** of every
   partition, so partition only where all of them together are a routine run;
   otherwise take the backfill window as run config (`ingest/pipeline.py`).
-- **Every asset and check is listed by hand in `definitions.py`**, and an
-  omission is silent — `just validate` passes.
+- **Every asset and check lives in `orchestration/defs/`**, one module per
+  layer, and is registered by being there: `definitions.py` loads the package
+  whole. One that no module there holds is silently absent — `just validate`
+  passes. Only assets, specs and checks load from it: a sensor, schedule, job or
+  resource there fails the load, so those stay in `definitions.py`.
 - **Every Dagster CLI command here is `@superseded`**, so each prints one line
   before it works: `dagster dev` names `dg dev`, `job execute` and `asset
   materialize` name `dg launch`, `definitions validate` names `dg check defs`. A
@@ -191,8 +194,8 @@ and `transform` stay independently runnable.
   Against a *running* `just dagster`, never pass `-m`: it names the code location
   after the module, so a `schedule start` flips a row the daemon does not read
   and a `job launch` fails the run it just returned 0 for.
-- **`orchestration/assets.py` must not use `from __future__ import annotations`**:
-  Dagster inspects the `context` parameter's annotation object.
+- **The modules in `orchestration/defs/` must not use `from __future__ import
+  annotations`**: Dagster inspects the `context` parameter's annotation object.
 - **The site is its own job** (`publish_site`), because it shells out to npm and
   every other job must run without Node.
 

@@ -35,7 +35,7 @@ jobs:
       # Then the test files that need the manifest `dbt parse` writes; they skip
       # in the step above. `tests/test_workflows.py` holds this list to the files
       # that skip, since a gated file missing here would run nowhere in CI.
-      # `validate` cannot see an asset that was never registered;
+      # `validate` cannot see an asset that no job reaches;
       # `test_definitions.py` can.
       - name: Validate Dagster definitions
         run: |
