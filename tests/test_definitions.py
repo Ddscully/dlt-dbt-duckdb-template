@@ -1,8 +1,9 @@
 """What the graph `orchestration/definitions.py` builds must hold.
 
-Registration is not tested here: every asset and check under
-`orchestration/defs/` is loaded by import, so there is no list for one to be
-missing from. What is still written by hand is the jobs' selections, and
+Every asset and check under `orchestration/defs/` is loaded by import, so there
+is no list for one to be missing from; what can still drop them is
+`Definitions` not being handed what the loaders found, which one test below
+catches for the checks. What is written by hand is the jobs' selections, and
 reachable through them is what runs.
 """
 
@@ -100,6 +101,40 @@ def test_a_defs_module_holding_what_the_loaders_skip_fails_the_load(stray):
     vars(module).update(fine=dg.AssetSpec("a"), stray=stray)
     with pytest.raises(dg.DagsterInvalidDefinitionError, match=r"example\.stray: only assets"):
         refuse_what_the_loaders_skip([module])
+
+
+def test_the_refusal_reads_the_package_init_too(monkeypatch):
+    """The loaders read `orchestration/defs/__init__.py` before the modules under
+    it, so a schedule left there is skipped like one in `defs/ingest.py`. Walking
+    only the modules under the package would let that one through."""
+    from orchestration import defs as defs_package
+    from orchestration.definitions import defs_modules, refuse_what_the_loaders_skip
+
+    stray = dg.ScheduleDefinition(
+        name="s", cron_schedule="0 1 * * *", target=dg.AssetSelection.all()
+    )
+    monkeypatch.setattr(defs_package, "stray", stray, raising=False)
+    with pytest.raises(dg.DagsterInvalidDefinitionError, match=r"orchestration\.defs\.stray: only"):
+        refuse_what_the_loaders_skip(defs_modules())
+
+
+def test_every_asset_check_written_in_defs_is_in_the_graph():
+    """`test_asset_checks.py` calls the check bodies directly, so it passes with
+    no check registered at all; and `just validate` passes on a `Definitions`
+    without its `asset_checks=` line. What the modules hold has to be in the
+    graph, which also holds every dbt test as a check of its own."""
+    from orchestration.definitions import defs, defs_modules
+
+    written = {
+        key
+        for module in defs_modules()
+        for value in vars(module).values()
+        if isinstance(value, dg.AssetChecksDefinition)
+        for key in value.check_keys
+    }
+    assert written, "no asset check found under orchestration/defs/"
+    missing = written - set(defs.resolve_asset_graph().asset_check_keys)
+    assert not missing, f"written in orchestration/defs/ but not in the graph: {sorted(missing)}"
 
 
 def test_every_raw_resource_has_an_asset_description():
