@@ -261,7 +261,7 @@ def is_catalog(lakehouse_dir: str | Path = LAKEHOUSE_DIR) -> bool:
         return bool(
             con.execute(
                 "select 1 from duckdb_tables() where table_name = 'ducklake_metadata'"
-            ).fetchone()
+            ).fetchall()
         )
     except duckdb.Error:
         return False

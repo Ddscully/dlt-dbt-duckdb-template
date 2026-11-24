@@ -30,6 +30,7 @@ import duckdb
 import pytest
 
 from lake import lakehouse
+from modern_data_stack import db
 from modern_data_stack.ducklake import attach, revisions, row_count, table_versions
 
 # The table expiry counts loads of, so the expiry tests below exercise the
@@ -106,6 +107,53 @@ def test_an_identical_reload_yields_no_revisions(tmp_path):
     finally:
         con.close()
     assert changed == []
+
+
+def test_versions_read_either_spelling_of_an_inlined_tables_snapshot_column(tmp_path):
+    """Spec 1.1 names an inlined table's bookkeeping columns `_ducklake_begin_snapshot`;
+    a 1.0 catalog keeps `begin_snapshot`, and DuckDB 2.0 does not migrate one.
+
+    The catalog is a plain DuckDB file, so the test renames the column to the
+    other spelling and reads again: that covers the 1.1 form on a 1.0 writer and
+    the 1.0 form on a 2.0 one, whichever DuckDB runs it.
+    """
+    _write(tmp_path, [LOAD, LOAD])
+    con = _connect(tmp_path)
+    try:
+        before = table_versions(con, "lakehouse", TABLE)
+    finally:
+        con.close()
+
+    catalog = duckdb.connect(str(tmp_path / "catalog.duckdb"))
+    try:
+        tables = [
+            name
+            for (name,) in catalog.execute(
+                "select table_name from ducklake_inlined_data_tables"
+            ).fetchall()
+        ]
+        assert tables, "the fixture no longer inlines, so this test proves nothing"
+        for name in tables:
+            have = {
+                column
+                for (column,) in catalog.execute(
+                    "select column_name from duckdb_columns() where table_name = $t", {"t": name}
+                ).fetchall()
+            }
+            old, new = (
+                ("_ducklake_begin_snapshot", "begin_snapshot")
+                if "_ducklake_begin_snapshot" in have
+                else ("begin_snapshot", "_ducklake_begin_snapshot")
+            )
+            catalog.execute(f'alter table "{name}" rename column {old} to {new}')
+    finally:
+        catalog.close()
+
+    con = _connect(tmp_path)
+    try:
+        assert table_versions(con, "lakehouse", TABLE) == before
+    finally:
+        con.close()
 
 
 def test_one_restated_value_yields_exactly_that_row(tmp_path):
@@ -300,9 +348,9 @@ def test_a_load_written_in_several_snapshots_is_one_load(tmp_path):
     versions = lakehouse.versions(TABLE, tmp_path)
     con = _connect(tmp_path)
     try:
-        previous = con.execute(
-            f"select count(*) from lakehouse.{TABLE} at (version => {versions[0]})"
-        ).fetchone()
+        previous = db.row(
+            con, f"select count(*) from lakehouse.{TABLE} at (version => {versions[0]})"
+        )
     finally:
         con.close()
     assert len(versions) == 2
@@ -484,10 +532,11 @@ def test_a_bucket_data_path_reaches_the_catalog_as_the_string_it_was_given(tmp_p
             alias="lakehouse",
             storage_secret=lakehouse.storage_secret(),
         )
-        stored = con.execute(
+        stored = db.row(
+            con,
             "select value from __ducklake_metadata_lakehouse.ducklake_metadata "
-            "where key = 'data_path'"
-        ).fetchone()
+            "where key = 'data_path'",
+        )
     finally:
         con.close()
     assert stored == (BUCKET,)

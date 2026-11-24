@@ -22,6 +22,14 @@ my_warehouse:
       type: duckdb
       path: "{{ env_var('WAREHOUSE_PATH', '../data/warehouse.duckdb') }}"
       threads: 4
+      # The file's storage format, asked for rather than inherited: the default
+      # follows the installed DuckDB, and the Evidence site reads this file with
+      # its own, older DuckDB (`@duckdb/node-api` in reports/package-lock.json).
+      # `config_options` reaches `duckdb.connect()`, so it acts when dbt creates
+      # the file. The same key under `settings:` is accepted and does nothing,
+      # because it is applied after the file exists.
+      config_options:
+        storage_compatibility_version: v1.0.0
       extensions:
         - httpfs
         - parquet
