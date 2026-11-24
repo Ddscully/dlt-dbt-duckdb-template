@@ -8,6 +8,7 @@ Run:  uv run python -m ingest.pipeline
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Iterable
 
@@ -80,6 +81,11 @@ def build_pipeline() -> dlt.Pipeline:
 
 
 def main() -> None:
+    # `ingest.http` logs each failed attempt and its wait at INFO; Python shows
+    # only warnings unless told otherwise. Under Dagster the instance's
+    # `python_logs` does this.
+    logging.basicConfig(format="%(asctime)s %(name)s %(message)s")
+    logging.getLogger("ingest").setLevel(logging.INFO)
     pipeline = build_pipeline()
     for names, kwargs in load_groups():
         print(pipeline.run(public_indicators().with_resources(*names), **kwargs))

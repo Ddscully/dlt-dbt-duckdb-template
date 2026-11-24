@@ -12,9 +12,11 @@ import time
 
 import pytest
 import requests
+import yaml
 
 from ingest import fixtures, http
 from ingest.sources import gold
+from modern_data_stack.paths import project_root
 
 
 class FakeResponse:
@@ -88,9 +90,11 @@ def test_get_json_raises_on_persistent_server_error(monkeypatch):
     flows into the landing zone.
     """
     seen = _mock_get(monkeypatch, [FakeResponse(status=500)] * http.RETRIES)
-    with pytest.raises(RuntimeError, match="failed to fetch JSON"):
+    with pytest.raises(RuntimeError, match="failed to fetch JSON") as raised:
         http.get_json("https://example.test/x")
     assert len(seen) == http.RETRIES
+    # The last attempt's own error, traceback and all, stays on the one raised.
+    assert isinstance(raised.value.__cause__, requests.HTTPError)
 
 
 def test_get_json_raises_on_non_json_body(monkeypatch):
@@ -159,6 +163,20 @@ def test_every_failed_attempt_is_logged_with_its_wait(monkeypatch, caplog):
         "https://example.test/x: attempt 1 of 5 failed (503 error); retrying in 4 s",
         "https://example.test/x: attempt 2 of 5 failed (reset); retrying in 8 s",
     ]
+
+
+def test_the_retry_log_reaches_a_dagster_run():
+    """A step's stdout and an unforwarded logger go to compute-log files no CI
+    log shows, so the lines above are only seen if the instance forwards the
+    logger at INFO. Without it a minute of retries looks like a hang."""
+    instance = yaml.safe_load((project_root() / ".dagster" / "dagster.yaml").read_text())
+    python_logs = instance["python_logs"]
+    managed = python_logs["managed_python_loggers"]
+    assert python_logs["python_log_level"] == "INFO"
+    name = http.log.name
+    assert any(name == m or name.startswith(f"{m}.") for m in managed), (
+        f"{name} is not under any of {managed}"
+    )
 
 
 @pytest.mark.parametrize(
