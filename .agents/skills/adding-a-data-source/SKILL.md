@@ -45,7 +45,7 @@ def gold_prices_monthly():
   default is never config. With `START_YEAR=1990` in the environment,
   `start_year: int = 2000` arrives as 1990, with no warning. `START_YEAR="2017
   2026"` raises `ConfigValueCannotBeCoercedException` where the source is
-  called without it, and `orchestration/assets.py` does that at import, so every
+  called without it, and `orchestration/defs/ingest.py` does that at import, so every
   Dagster command fails. A tuple argument coerces from neither `"2017 2026"` nor
   `"[2017, 2026]"` (all measured on dlt 1.30). A `workflow_dispatch` input is not
   an environment variable and may carry the argument's name. A step's or job's
@@ -80,7 +80,7 @@ ignores the config, loads the default window and exits 0 (measured on 1.13.22).
 Add a `- name:` under the `raw` source, with a description. The name must be the
 dlt resource's name, exactly.
 
-**This is where the asset graph joins.** `orchestration/assets.py` keys dlt
+**This is where the asset graph joins.** `orchestration/defs/ingest.py` keys dlt
 resources as `raw/<resource>` so they meet the keys dagster-dbt derives from
 this file. Spell one of them differently and the graph silently splits into two
 halves that both still run. `just materialize-preview '*'` shows the keys.
@@ -124,11 +124,12 @@ no two routes claim one URL, every route is reachable, no fixture is orphaned.
 
 ## 6. The orchestration layer — `orchestration/`
 
-- `RAW_DESCRIPTIONS` in `assets.py` needs an entry per resource;
-  `tests/test_definitions.py` fails without one.
-- A new Polars transform is a new `@dg.asset`, and it must also be listed by
-  hand in `definitions.py`. **An asset missing from that list is not in the
-  graph at all**, and `dagster definitions validate` still passes.
+- `RAW_DESCRIPTIONS` in `orchestration/defs/ingest.py` needs an entry per
+  resource; `tests/test_definitions.py` fails without one.
+- A new Polars transform is a new `@dg.asset` in `orchestration/defs/analytics.py`,
+  and a new asset check goes in `orchestration/defs/checks.py`. Being there is
+  what registers it; **one defined anywhere else is not in the graph at all**,
+  and `dagster definitions validate` still passes.
 - `transform/pipeline_status.py`'s `SOURCE_TABLES` lists the landing tables the
   observability page inventories.
 

@@ -1,4 +1,5 @@
-"""The eight `@dg.asset_check` bodies, run without materializing anything.
+"""The `@dg.asset_check` bodies in `orchestration/defs/checks.py`, run without
+materializing anything.
 
 `tests/test_definitions.py` proves each check is *registered*; this proves each
 would *notice*. Otherwise the bodies run only in a full materialize, and
@@ -32,7 +33,7 @@ from lake.lakehouse import ATTACH_ALIAS, catalog_path, data_path
 from modern_data_stack.ducklake import attach
 from orchestration.resources import dbt_project
 
-# Importing `orchestration.assets` needs the manifest, which does not exist when
+# Importing `orchestration.defs` needs the manifest, which does not exist when
 # ci.yml first runs pytest. CI re-runs this file after `dbt parse`, which
 # `tests/test_workflows.py` enforces.
 pytestmark = pytest.mark.skipif(
@@ -40,15 +41,16 @@ pytestmark = pytest.mark.skipif(
     reason="needs dbt/target/manifest.json — run `just dbt-deps` and `dbt parse` first",
 )
 
-# The dlt-pipeline-deactivation fixture this file needs (importing the
-# orchestration layer leaves a dlt pipeline active process-wide) lives in
-# `tests/conftest.py`, shared with `test_definitions.py`.
+# This file imports `orchestration.defs.checks` alone, which leaves no dlt
+# pipeline active; `tests/conftest.py`'s autouse teardown covers the files that
+# load the whole graph.
 
 
 @pytest.fixture(scope="module")
-def assets():
-    """The orchestration module, imported lazily so the skipif above can fire."""
-    from orchestration import assets as module
+def checks():
+    """The checks module, imported lazily so the skipif above can fire. Its
+    globals are what the tests patch (its docstring says why they live there)."""
+    from orchestration.defs import checks as module
 
     return module
 
@@ -133,21 +135,21 @@ def _history(tmp_path: Path, *invocation_ids: str) -> str:
     )
 
 
-def test_run_history_check_passes_when_this_build_left_rows(tmp_path, monkeypatch, assets):
+def test_run_history_check_passes_when_this_build_left_rows(tmp_path, monkeypatch, checks):
     warehouse = _history(tmp_path, "abc-123", "abc-123", "older-run")
-    monkeypatch.setattr(assets, "DUCKDB_PATH", warehouse)
+    monkeypatch.setattr(checks, "DUCKDB_PATH", warehouse)
     monkeypatch.setattr(
-        assets, "dbt_run_results_path", lambda: str(_run_results(tmp_path, "abc-123"))
+        checks, "dbt_run_results_path", lambda: str(_run_results(tmp_path, "abc-123"))
     )
 
-    result = assets.run_history_records_this_build()
+    result = checks.run_history_records_this_build()
 
     assert result.passed
     assert _meta(result, "nodes_recorded") == 2
     assert _meta(result, "invocations_in_history") == 2
 
 
-def test_run_history_check_fails_when_the_build_appended_nowhere(tmp_path, monkeypatch, assets):
+def test_run_history_check_fails_when_the_build_appended_nowhere(tmp_path, monkeypatch, checks):
     """The build appended nothing, but the table is not empty.
 
     If dbt writes `run_results.json` somewhere `build_runs` does not read, it
@@ -156,21 +158,21 @@ def test_run_history_check_fails_when_the_build_appended_nowhere(tmp_path, monke
     them are this build's.
     """
     warehouse = _history(tmp_path, "an-earlier-run", "an-earlier-run")
-    monkeypatch.setattr(assets, "DUCKDB_PATH", warehouse)
+    monkeypatch.setattr(checks, "DUCKDB_PATH", warehouse)
     monkeypatch.setattr(
-        assets,
+        checks,
         "dbt_run_results_path",
         lambda: str(_run_results(tmp_path, "the-build-that-just-ran")),
     )
 
-    result = assets.run_history_records_this_build()
+    result = checks.run_history_records_this_build()
 
     assert not result.passed
     assert _meta(result, "nodes_recorded") == 0
     assert _meta(result, "invocations_in_history") == 1
 
 
-def test_run_history_check_fails_when_dbt_left_no_artifact_at_all(tmp_path, monkeypatch, assets):
+def test_run_history_check_fails_when_dbt_left_no_artifact_at_all(tmp_path, monkeypatch, checks):
     """A missing artifact is a failure, not a pass by absence.
 
     `build_runs` tolerates it — a fresh clone is a real state and the other
@@ -178,10 +180,10 @@ def test_run_history_check_fails_when_dbt_left_no_artifact_at_all(tmp_path, monk
     ends here: by the time `pipeline_status` materializes in the graph, a dbt
     build has run upstream of it and an absent artifact means the path moved.
     """
-    monkeypatch.setattr(assets, "DUCKDB_PATH", _history(tmp_path, "whatever"))
-    monkeypatch.setattr(assets, "dbt_run_results_path", lambda: str(tmp_path / "nowhere.json"))
+    monkeypatch.setattr(checks, "DUCKDB_PATH", _history(tmp_path, "whatever"))
+    monkeypatch.setattr(checks, "dbt_run_results_path", lambda: str(tmp_path / "nowhere.json"))
 
-    result = assets.run_history_records_this_build()
+    result = checks.run_history_records_this_build()
 
     assert not result.passed
     assert "run_results" in _meta(result, "reason")
@@ -204,34 +206,34 @@ def _routes(tmp_path: Path, sizes: dict[str, int | None]) -> dict[str, Path]:
     return routes
 
 
-def test_site_check_passes_when_every_page_rendered(tmp_path, monkeypatch, assets):
+def test_site_check_passes_when_every_page_rendered(tmp_path, monkeypatch, checks):
     routes = _routes(tmp_path, {"index": 19_000, "gold": 92_000})
-    monkeypatch.setattr(assets, "page_routes", lambda: routes)
+    monkeypatch.setattr(checks, "page_routes", lambda: routes)
 
-    result = assets.site_pages_all_rendered()
+    result = checks.site_pages_all_rendered()
 
     assert result.passed
     assert _meta(result, "pages_expected") == 2
 
 
-def test_site_check_fails_a_page_that_never_rendered(tmp_path, monkeypatch, assets):
+def test_site_check_fails_a_page_that_never_rendered(tmp_path, monkeypatch, checks):
     """`evidence build` exits 0 for a site missing a page."""
     routes = _routes(tmp_path, {"index": 19_000, "gold": None})
-    monkeypatch.setattr(assets, "page_routes", lambda: routes)
+    monkeypatch.setattr(checks, "page_routes", lambda: routes)
 
-    result = assets.site_pages_all_rendered()
+    result = checks.site_pages_all_rendered()
 
     assert not result.passed
     assert _meta(result, "missing") == ["gold"]
 
 
-def test_site_check_fails_a_route_that_emitted_only_the_shell(tmp_path, monkeypatch, assets):
+def test_site_check_fails_a_route_that_emitted_only_the_shell(tmp_path, monkeypatch, checks):
     """Present and non-empty, and still not a page. This is the failure that
     looks most like success, which is why the check measures size at all."""
     routes = _routes(tmp_path, {"index": 19_000, "gold": 900})
-    monkeypatch.setattr(assets, "page_routes", lambda: routes)
+    monkeypatch.setattr(checks, "page_routes", lambda: routes)
 
-    result = assets.site_pages_all_rendered()
+    result = checks.site_pages_all_rendered()
 
     assert not result.passed
     assert _meta(result, "suspiciously_small") == {"gold": 900}

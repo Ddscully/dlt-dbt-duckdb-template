@@ -11,7 +11,7 @@ holding the *plumbing* to the tree:
 | File | What it pins down |
 |---|---|
 | `test_fixtures.py` | that every URL the pipeline can build resolves to a recorded fixture, that no two routes claim one URL, and that no fixture is orphaned |
-| `test_definitions.py` | that every asset and check is registered, and that every dlt resource has a description and a row in the observability list |
+| `test_definitions.py` | that every asset check under `orchestration/defs/` is in the graph, that the jobs between them reach every asset, that a defs module holding what the loaders skip fails the load, and that every dlt resource has a description and a row in the observability list |
 | `test_asset_checks.py` | the asset checks' own logic, against throwaway DuckDB files |
 | `test_exposures.py` | that `_exposures.yml` still describes what the Evidence pages read — a stale exposure is invisible, since `dbt build` stays green |
 | `test_report.py` | that the table-to-model maps in `publish/build_report.py` match the SQL the pages actually run |

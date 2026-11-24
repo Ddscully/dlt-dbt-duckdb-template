@@ -206,7 +206,7 @@ def dlt_credentials(lakehouse_dir: str | Path = LAKEHOUSE_DIR):
     from dlt.destinations.impl.ducklake.configuration import DuckLakeCredentials
 
     # Required: dlt will not create the catalog's parent directory. Because
-    # importing `orchestration.assets` builds the pipeline, that import creates an
+    # importing `orchestration.defs.ingest` builds the pipeline, that import creates an
     # empty `data/lakehouse/` before anything has loaded — which `is_catalog`
     # exists to tell apart from a real one.
     lake = Path(lakehouse_dir)

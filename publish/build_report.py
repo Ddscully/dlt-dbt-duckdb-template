@@ -53,7 +53,7 @@ BUILD_DIR = REPORTS_DIR / "build"
 # dependencies out of the SQL — see `source_tables`.
 WAREHOUSE_SCHEMAS = ("raw", "staging", "marts", "analytics", "history")
 
-# What writes each table the source queries read; `orchestration/assets.py` turns
+# What writes each table the source queries read; `orchestration/defs/site.py` turns
 # these into the Evidence asset's deps. dbt models go by model name (their asset
 # keys come from the manifest), Polars outputs by asset key — the four
 # `pipeline_*` tables share one, written by a single op. A table no page reads

@@ -106,9 +106,11 @@ extend-select = [
 ]
 
 [tool.ruff.lint.isort]
-# Keep `from x import a, run as b` on one statement. ruff's default splits the
-# alias onto its own line, which shreds orchestration/assets.py's import block —
-# four layers each export a `run()`, so it aliases every one. See the
+# Keep `from x import a, run as b` on one statement whenever ruff sorts imports
+# (rule I, which the defaults leave off, or an editor's organize-imports); its
+# default splits the alias onto a line of its own. Measured with `--select I`, it
+# holds whole the aliased imports in orchestration/defs/ingest.py,
+# orchestration/defs/site.py and lake/lakehouse.py. See the
 # linting-and-type-checking skill.
 combine-as-imports = true
 
