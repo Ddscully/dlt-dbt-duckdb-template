@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 from publish import build_report
 
 
@@ -72,3 +74,18 @@ def test_page_routes_cover_the_pages_that_exist():
         for p in build_report.PAGES_DIR.rglob("*.md")
     }
     assert set(build_report.page_routes()) == markdown
+
+
+def test_dbt_asks_for_a_storage_format_the_site_can_open():
+    """The warehouse's format is asked for where dbt creates the file, not
+    inherited from whichever DuckDB is installed: Evidence reads it with its own,
+    older DuckDB, and DuckDB 2.0 writes a newer format by default.
+
+    Under `config_options`, which reaches `duckdb.connect()`. The same key under
+    `settings:` passes `dbt debug` and does nothing, because it is applied after
+    the file exists — so this asserts where the key is, not only that it is set.
+    """
+    profile = yaml.safe_load(Path("dbt/profiles.yml").read_text())
+    dev = profile["my_warehouse"]["outputs"]["dev"]
+    assert dev["config_options"]["storage_compatibility_version"] == "v1.0.0"
+    assert "storage_compatibility_version" not in (dev.get("settings") or {})
