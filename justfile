@@ -265,7 +265,7 @@ materialize-select selection: where dbt-parse
 [group('dagster')]
 materialize-preview selection: dbt-parse
     uv run --group orchestration dagster asset list \
-        -m orchestration.definitions --select '{{ selection }}'
+        -m orchestration.definitions --select {{ quote(selection) }}
 
 # `dbt-parse` first: the code location imports the dbt project, so without a
 # manifest it fails to load rather than reporting what is unregistered. No `-m`,
